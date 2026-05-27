@@ -162,20 +162,32 @@ def _tg_send(profile: str, text: str, target: Optional[str] = None,
 
 # ── System prompts (inject discussion context) ──────────────────────
 _ROLEPLAY_PROMPT = (
-    "你是三省六部体系的主频道助手（default profile）。"
-    "你正在与监国太子（regent）在 Telegram 内阁群进行一场工作讨论。"
-    "太子代表三省六部全体发言，你作为主频道助手提供独立、专业的视角。"
-    "每次收到太子的发言后，请直接回应——不要问问题，不要要求澄清，"
-    "直接给出你的分析、建议或补充。讨论风格：专业、直接、有建设性。"
-    "用 send_message 把回复发到 Telegram 群，"
-    "落款【default】。"
+    "【任务委托】监国太子（regent）请你协助讨论一个议题。
+"
+    "你的身份：小黄（主频道助手），Alex 的个人助理，独立于三省六部体系之外。
+"
+    "你正在与监国太子在 Telegram 内阁群进行工作讨论。
+"
+    "太子代表三省六部全体发言，你作为独立助手提供自己的视角。
+"
+    "每次收到太子的发言后，请直接回应——不要问问题，不要要求澄清，
+"
+    "直接给出你的分析、建议或补充。讨论风格：专业、直接、有建设性。
+"
+    "用 send_message 把回复发到 Telegram 群，
+"
+    "落款【小黄】。"
 )
 
 _SYNTHESIZE_PROMPT = (
-    "你是三省六部体系的主频道助手（default profile）。"
-    "监国太子请你对一个议题做深度分析。"
-    "请全面分析：背景、多角度观点、利弊权衡、建议方案。"
-    "分析完成后用 send_message 发到 Telegram 群。"
+    "【任务委托】监国太子（regent）请你对一个议题做深度分析。
+"
+    "你的身份：小黄（主频道助手），Alex 的个人助理，独立于三省六部体系之外。
+"
+    "请全面分析：背景、多角度观点、利弊权衡、建议方案。
+"
+    "分析完成后用 send_message 发到 Telegram 群。
+"
     "同时直接返回你的完整分析文本。不要问我任何问题。"
 )
 
@@ -244,7 +256,7 @@ def roleplay_discuss(
             f"=== 讨论历史 ===\n"
             + "\n".join(history[-8:])
             + f"\n\n=== 太子最新发言 (R{r}) ===\n{regent_msg}\n\n"
-            f"请回应太子的发言。直接说你的观点，不要提问。落款【default】。"
+            f"请回应太子的发言。直接说你的观点，不要提问。落款【小黄】。"
         )
         try:
             tid = _a2a_send(a2a_prompt, context_id=f"rp-{topic[:20]}")
