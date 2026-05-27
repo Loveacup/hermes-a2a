@@ -56,6 +56,20 @@ hermes-a2a/
 - `GET /a2a/tasks/{id}`（查询状态 + artifact）
 - `GET /a2a/tasks/{id}/stream`（SSE，当前 stub）
 
+## 体系角色
+
+hermes-a2a 在三省六部治理体系中连接以下关键角色：
+
+| 角色 | Profile | A2A 端口 | 身份 |
+|------|---------|----------|------|
+| **监国太子** | `regent` | 8939 | 三省六部总枢，承旨、拟制、派工、稽核 |
+| **小黄** | `default` | 8945 | Alex 的个人助理，**独立于三省六部体系之外** |
+| 六部/三省/御史台等 | 14 个 profile | 详见 port-map | 三省六部各职能部门 |
+
+> **小黄的身份**：小黄（default profile）是 Alex 的贴身秘书，不属于三省六部任何部门。
+> 他与太子（regent）是**平等协作**关系，非上下级。在 A2A 讨论（内阁群 ROLEPLAY/SYNTHESIZE）中，
+> 小黄以独立视角提供分析，不代三省六部发言。落款统一为【小黄】。
+
 ## 关联文档
 
 - [core/README.md](core/README.md) — 内核插件文档
