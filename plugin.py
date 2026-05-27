@@ -1,14 +1,20 @@
 """hermes-a2a plugin — loads on profile startup, starts A2A HTTP server."""
-import logging, os, sys, subprocess
+import hashlib, logging, os, sys, subprocess
 from pathlib import Path
 
 logger = logging.getLogger("hermes-a2a")
 PLUGIN_NAME, PLUGIN_VERSION = "hermes-a2a", "0.1.0"
+PORT_BASE, PORT_RANGE = 8650, 50
 _server_proc = None
+
+def _stable_port(profile: str) -> int:
+    # PYTHONHASHSEED randomization breaks port stability across gateway restarts;
+    # sha256 keeps the same `hash(profile) % 50 + 8650` shape but deterministically.
+    return PORT_BASE + int(hashlib.sha256(profile.encode()).hexdigest(), 16) % PORT_RANGE
 
 def on_load(ctx):
     cfg = ctx.config or {}
-    port = int(cfg.get("port", 8650 + (hash(os.environ.get("HERMES_PROFILE","default")) % 50)))
+    port = int(cfg.get("port", _stable_port(os.environ.get("HERMES_PROFILE", "default"))))
     host = cfg.get("host", "127.0.0.1")
     global _server_proc
     env = os.environ.copy()

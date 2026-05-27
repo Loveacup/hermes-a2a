@@ -1,0 +1,10 @@
+name: hermes-a2a
+version: 0.1.0
+description: >
+  三省六部跨部门 A2A 通信协议插件。基于 Google A2A Protocol (a2aproject/A2A)，
+  在每个 profile 启动时自动暴露 /a2a HTTP 服务（Agent Card + Task 端点），
+  端口按 sha256(profile) % 50 + 8650 自动分配，无需手工映射。
+kind: standalone
+author: 尚书省 / hermes-a2a
+homepage: https://github.com/Loveacup/hermes-a2a
+license: Apache-2.0
