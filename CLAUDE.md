@@ -22,6 +22,7 @@ hermes-a2a/
 │   ├── agent_card.py              # Agent Card 自动生成
 │   ├── task_handler.py            # 双模任务执行
 │   ├── plugin.yaml                # 插件元数据
+│   ├── discuss.py                  # 讨论编排引擎（ROLEPLAY + SYNTHESIZE）
 │   ├── requirements.txt           # pyyaml
 │   ├── __init__.py                # from .plugin import register
 │   ├── templates/
@@ -41,6 +42,7 @@ hermes-a2a/
 │   │   ├── s6m-a2a-optimization.md  # 三大支柱方案
 │   │   └── audits/                # 审计报告
 │   ├── port-map.md                # 16 profile 端口快查（doctor 读它）
+│   ├── discuss-modes.yaml          # 讨论模式配置
 │   └── README.md                  # 三省六部部署文档
 │
 ├── README.md                      # 顶层入口（解释 core/ vs s6m-config/）
@@ -88,7 +90,8 @@ HOME=/Users/alexcai launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.herme
 
 - Step 1 ✅ 完成：6 profile（engineer/shangshu/budget/regent/default/gongbu）
 - Step 2 ✅ 完成：全 16 profile + PORT_RANGE=300 公式化 + launchd 统一监管 + monorepo 拆分
-- Step 3 待启动：EmpireThread 事件桥（MEMORY_QUERY → Hindsight）
+- 讨论模式 ✅ 完成：ROLEPLAY（双边辩论）+ SYNTHESIZE（综合研判），core/discuss.py + a2a-discussion skill
+- Step 3 待启动：EmpireThread 事件桥（MEMORY_QUERY to Hindsight）
 
 详细端口表见 `s6m-config/port-map.md`。
 
