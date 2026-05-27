@@ -14,6 +14,55 @@ logger = logging.getLogger("hermes-a2a.task_handler")
 _API_SERVER_PORTS = {"regent": 8643, "default": 8642}
 _API_TIMEOUT = 300
 
+# ── Result classification ──────────────────────────────────────────────
+# Heuristic signals in the agent's final response text.
+# Scoped to send_message / delivery failures — NOT general "can't do X" analysis.
+# Ordered: tool_unavailable checked FIRST (degraded > succeeded).
+_RESULT_SIGNALS = {
+    "tool_unavailable": [
+        # English — send_message specific
+        "unable to send", "cannot send", "can't send",
+        "unable to deliver", "could not send", "failed to send",
+        "conflict",  # Telegram polling conflict
+        # Chinese — 发送特定
+        "无法发送", "发送失败", "发送不了", "发不了",
+        "发不出去", "无法投递",
+    ],
+    "task_achieved": [
+        # English
+        "sent", "delivered", "successful",
+        "successfully",
+        # Chinese
+        "已发送", "已完成", "发送成功", "成功发送",
+        "已送达", "已投递",
+    ],
+}
+
+
+def _classify(status: str, response: str, error: str = "") -> dict:
+    """Return semantic_status + completion_reason for the task result.
+
+    semantic_status  ∈ {succeeded, degraded, failed}
+    completion_reason ∈ {task_achieved, tool_unavailable, agent_error, timeout, unknown}
+    """
+    if status == "failed":
+        if error and "timeout" in error.lower():
+            return {"semantic_status": "failed", "completion_reason": "timeout"}
+        return {"semantic_status": "failed", "completion_reason": "agent_error"}
+
+    r = response.lower()
+
+    # degraded trumps succeeded — check first
+    for sig in _RESULT_SIGNALS["tool_unavailable"]:
+        if sig in r:
+            return {"semantic_status": "degraded", "completion_reason": "tool_unavailable"}
+
+    for sig in _RESULT_SIGNALS["task_achieved"]:
+        if sig in r:
+            return {"semantic_status": "succeeded", "completion_reason": "task_achieved"}
+
+    return {"semantic_status": "succeeded", "completion_reason": "unknown"}
+
 
 def handle_task(task: dict) -> dict:
     tid = task.get("id", "unknown")
@@ -73,8 +122,13 @@ def _via_api_server(task: dict, tid: str, prompt: str, profile: str) -> dict:
                         m.get("content", "") for m in output
                         if isinstance(m, dict) and m.get("type") == "message"
                     )
+                output_str = str(output)
+                cls = _classify(task["status"], output_str, task.get("error", ""))
+                task["semantic_status"] = cls["semantic_status"]
+                task["completion_reason"] = cls["completion_reason"]
                 task["artifact"] = {
-                    "response": str(output),
+                    "response": output_str,
+                    "fallback_text": output_str,
                     "duration_s": round(time.time() - start, 2),
                     "run_id": run_id,
                     "mode": "api_server",
@@ -122,9 +176,14 @@ def _via_subprocess(task: dict, tid: str, prompt: str, profile: str) -> dict:
                 if k not in env:
                     env[k] = v.strip().strip('"').strip("'")
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=env)
+    output = r.stdout.strip() or r.stderr.strip()
     task["status"] = "completed" if r.returncode == 0 else "failed"
+    cls = _classify(task["status"], output, task.get("error", ""))
+    task["semantic_status"] = cls["semantic_status"]
+    task["completion_reason"] = cls["completion_reason"]
     task["artifact"] = {
-        "response": r.stdout.strip() or r.stderr.strip(),
+        "response": output,
+        "fallback_text": output,
         "duration_s": round(time.time() - start, 2),
         "mode": "subprocess",
     }

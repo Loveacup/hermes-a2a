@@ -95,7 +95,8 @@ def _execute_task(tid: str) -> None:
         logger.info(f"[hermes-a2a] executing task {tid}")
         result = handle_task(task)
         _tasks[tid] = result
-        logger.info(f"[hermes-a2a] task {tid} → {result.get('status')}")
+        logger.info(f"[hermes-a2a] task {tid} → {result.get('status')} "
+                    f"[{result.get('semantic_status', '?')}/{result.get('completion_reason', '?')}]")
     except Exception as e:
         _tasks[tid]["status"] = "failed"
         _tasks[tid]["error"] = str(e)

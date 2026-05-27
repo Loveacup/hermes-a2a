@@ -101,3 +101,6 @@ hermes-a2a/（源码 ~/code/hermes-a2a/）
 - 2026-05-27: P0/P1/P2 修复（PORT_RANGE 50→200, threading 接通, launchd 全量监管, SKILL_MAP A2A 1.0, 双模执行, seed symlink 脚本）。
 - 2026-05-27: 二轮 CC 3-agent team 审计 — 确认 P0-2/P0-3 已修, 发现 NEW-P0-A（源码未同步）+ NEW-P0-B（PORT_RANGE=200 仍有碰撞）。
 - 2026-05-27: NEW-P0-A/B 修复 — PORT_RANGE 200→300（零碰撞）, 源码 ↔ 部署 ↔ GitHub 三同步, commit `d4b73a4`。v0.1.1 生产就绪。
+- 2026-05-28: Monorepo 拆分 — core/（通用内核）+ s6m-config/（三省六部配置）, commit `6a4ce85`。
+- 2026-05-28: Obsidian 全量同步 — 11 份文档入 vault（Inbox 3 + 审计 5 + 方案 3）。
+- 2026-05-28: 结果语义升级 — task_handler 增加 `semantic_status`（succeeded/degraded/failed）+ `completion_reason` + `fallback_text`。修复 A2A 任务 blind-complete + 无回退问题。
