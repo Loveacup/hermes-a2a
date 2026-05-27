@@ -104,3 +104,5 @@ hermes-a2a/（源码 ~/code/hermes-a2a/）
 - 2026-05-28: Monorepo 拆分 — core/（通用内核）+ s6m-config/（三省六部配置）, commit `6a4ce85`。
 - 2026-05-28: Obsidian 全量同步 — 11 份文档入 vault（Inbox 3 + 审计 5 + 方案 3）。
 - 2026-05-28: 结果语义升级 — task_handler 增加 `semantic_status`（succeeded/degraded/failed）+ `completion_reason` + `fallback_text`。修复 A2A 任务 blind-complete + 无回退问题。
+- 2026-05-28: 信号覆盖补丁 — 中文口语化表达（已发到/已发至/已发出）纳入分类器。commit `2a19515`。
+- 2026-05-28: 讨论模式 — core/discuss.py 支持两种模式：ROLEPLAY（多轮角色扮演，双方各自发 TG 内阁群）和 SYNTHESIZE（default 深度分析 → regent 综合研判）。s6m-config/discuss-modes.yaml 配置。

@@ -1,0 +1,29 @@
+# A2A Discussion Modes — 三省六部配置
+# 使用：python core/discuss.py <mode> "<topic>"
+
+modes:
+  roleplay:
+    description: >
+      太子与主频道在 Telegram 内阁群进行多轮角色扮演讨论。
+      双方各自独立发消息到群内，形成可见的讨论流。
+      （Telegram bot 间无法互看消息，此模式通过 A2A 内部通信 + TG 独立投递实现）
+    default_rounds: 3
+    target: "-5133970461"
+    participants:
+      - profile: regent
+        role: "监国太子（代表三省六部全体发言）"
+        prefix: "【太子 · 三省六部】"
+      - profile: default
+        role: "主频道助手（独立视角）"
+        prefix: "【default】"
+
+  synthesize:
+    description: >
+      太子向主频道发送深度分析请求，default 返回完整分析，
+      太子统合双方观点形成综合研判报告，张贴到内阁群。
+    target: "-5133970461"
+    participants:
+      - profile: regent
+        role: "综合研判"
+      - profile: default
+        role: "深度分析"
