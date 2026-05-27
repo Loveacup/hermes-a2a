@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hermes.a2a.reviewer</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/Developer/CommandLineTools/usr/bin/python3</string>
+        <string>/Users/alexcai/.hermes/plugins/hermes-a2a/server.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/alexcai/.hermes/plugins/hermes-a2a</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HERMES_PROFILE</key>
+        <string>reviewer</string>
+        <key>A2A_PORT</key>
+        <string>8761</string>
+        <key>HERMES_HOME</key>
+        <string>/Users/alexcai/.hermes/profiles/reviewer</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/a2a-reviewer-8761.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/a2a-reviewer-8761.err</string>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
