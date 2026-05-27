@@ -31,16 +31,22 @@ repo: https://github.com/finalhour/hermes-a2a
 
 ## 部署计划
 
-### Step 1: 核心 4 profile（最小闭环）
+### 当前状态：6-profile launchd 监管（已生产就绪）
 
-| Profile | 端口 | 角色 |
-|---------|------|------|
-| shangshu | 8650 | 尚书省 API Hub |
-| engineer | 8651 | 兵部 / 代码实现 |
-| gongbu | 8652 | 工部 / 基础设施 |
-| budget | 8653 | 户部 / 数据与成本 |
+| Profile | 端口 | 技能数 | 执行模式 |
+|---------|------|--------|----------|
+| engineer | 8668 | 5 | subprocess |
+| shangshu | 8676 | 4 | subprocess |
+| budget | 8686 | 3 | subprocess |
+| regent | 8689 | 13 | API Server /v1/runs |
+| default | 8695 | 13 | API Server /v1/runs |
+| gongbu | 8698 | 4 | subprocess |
 
-### Step 2: 全量部署（15 profile + A2A Agent Card）
+端口公式：`sha256(profile) % 300 + 8650`（16 profile 零碰撞验证通过）。全部由 launchd KeepAlive 监管，ThrottleInterval=30s。
+
+### Step 1: 核心 4 profile（已完成 2026-05-27）
+
+### Step 2: 全量部署（10+ profile，端口公式化）
 
 ### Step 3: EmpireThread 事件桥（MEMORY_QUERY → Hindsight 跨部门只读）
 
@@ -57,14 +63,27 @@ repo: https://github.com/finalhour/hermes-a2a
 ## 文件清单
 
 ```
-~/.hermes/plugins/hermes-a2a/
-├── __init__.py          # 模块入口
-├── plugin.py            # Hermes 插件加载器
-├── server.py            # A2A HTTP Server
-├── agent_card.py        # Agent Card 自动生成
-├── task_handler.py      # Task → Hermes agent 转发
-├── requirements.txt     # pyyaml
-└── README.md            # 本文件
+hermes-a2a/（源码 ~/code/hermes-a2a/）
+├── plugin.py              # Hermes 插件加载器
+├── server.py              # A2A HTTP Server
+├── agent_card.py          # Agent Card 自动生成
+├── task_handler.py        # Task → Hermes agent（双模执行）
+├── plugin.yaml            # 插件元数据
+├── requirements.txt       # pyyaml
+├── scripts/
+│   ├── hermes-a2a-doctor.sh   # 健康聚合器
+│   └── seed-a2a-symlinks.sh   # per-profile symlink 种子
+├── docs/
+│   ├── tracking.md            # 项目追踪
+│   ├── methodology.md         # 方法论文档 + ADR
+│   ├── architecture-comparison.md  # A2A vs API Bridge 对比
+│   ├── deployment-report.md       # 部署接入报告
+│   └── audits/
+│       ├── 01-initial-audit.md        # 首轮审计（CC agent team）
+│       ├── 02-reaudit.md              # 二轮审计（3-agent team）
+│       └── 02-reaudit-ops-agent.md    # Ops agent 详细报告
+├── CLAUDE.md             # AI 协作文档
+└── README.md             # 用户文档
 ```
 
 ## 关联
@@ -76,4 +95,9 @@ repo: https://github.com/finalhour/hermes-a2a
 
 ## 日志
 
-- 2026-05-27: 项目立项。创建 GitHub 仓库 + Obsidian 文档。Step 1 启动。
+- 2026-05-27: 项目立项。创建 GitHub 仓库 + Obsidian 文档。
+- 2026-05-27: Step 1 核心 4 profile 部署 + regent/default API Server 接入。
+- 2026-05-27: 首轮 CC agent team 审计 — 发现 P0×3（端口碰撞/task_handler 未接通/无看门狗）。
+- 2026-05-27: P0/P1/P2 修复（PORT_RANGE 50→200, threading 接通, launchd 全量监管, SKILL_MAP A2A 1.0, 双模执行, seed symlink 脚本）。
+- 2026-05-27: 二轮 CC 3-agent team 审计 — 确认 P0-2/P0-3 已修, 发现 NEW-P0-A（源码未同步）+ NEW-P0-B（PORT_RANGE=200 仍有碰撞）。
+- 2026-05-27: NEW-P0-A/B 修复 — PORT_RANGE 200→300（零碰撞）, 源码 ↔ 部署 ↔ GitHub 三同步, commit `d4b73a4`。v0.1.1 生产就绪。

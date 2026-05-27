@@ -19,11 +19,18 @@ hermes-a2a/
 ├── plugin.py            # Hermes 插件入口（gateway 启动时自动加载）
 ├── server.py            # A2A HTTP Server（Agent Card + Task 端点）
 ├── agent_card.py        # 从 profile config 自动生成 Agent Card
-├── task_handler.py      # A2A Task → Hermes agent loop 转发
+├── task_handler.py      # A2A Task → Hermes agent loop 转发（双模执行）
+├── plugin.yaml          # 插件元数据
 ├── requirements.txt     # pyyaml
+├── scripts/
+│   ├── hermes-a2a-doctor.sh   # 健康聚合器（8/8 端点）
+│   └── seed-a2a-symlinks.sh   # per-profile symlink 一键创建
 ├── docs/
 │   ├── tracking.md      # 项目追踪（与 Obsidian 同步）
-│   └── methodology.md   # 方法论文档
+│   ├── methodology.md   # 方法论文档 + ADR
+│   ├── architecture-comparison.md  # A2A vs API Bridge 对比
+│   ├── deployment-report.md       # 部署接入报告
+│   └── audits/          # CC agent team 审计报告
 ├── CLAUDE.md            # 本文件
 └── README.md            # 用户文档
 ```
@@ -80,11 +87,13 @@ curl localhost:8650/a2a/tasks/{task_id}/stream
 
 ## 部署计划
 
-| 阶段 | 范围 | 端口分配 |
-|------|------|---------|
-| Step 1 | shangshu+engineer+gongbu+budget | 8650-8653 |
-| Step 2 | 全 15 profile | 8650-8664 |
-| Step 3 | EmpireThread 事件桥 | MEMORY_QUERY → Hindsight |
+| 阶段 | 范围 | 状态 |
+|------|------|------|
+| Step 1 | 6 profile（engineer/shangshu/budget/regent/default/gongbu） | ✅ 已完成 |
+| Step 2 | 全 15 profile 端口公式化 | 端口公式 sha256(profile) % 300 + 8650 已验证零碰撞 |
+| Step 3 | EmpireThread 事件桥 | 待启动 |
+
+当前 6 个 A2A 服务全部由 launchd KeepAlive 监管（ThrottleInterval=30s），端口映射见 docs/tracking.md。
 
 ## 关联系统
 
