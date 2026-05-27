@@ -4,19 +4,34 @@
 import json, os
 from pathlib import Path
 
-SKILL_MAP = {"terminal": "shell-execution", "file": "file-operations", "web": "web-research",
-             "browser": "browser-automation", "delegation": "task-delegation",
-             "kanban": "kanban-workflow", "memory": "persistent-memory",
-             "vision": "image-analysis", "image_gen": "image-generation",
-             "code_execution": "code-execution", "session_search": "session-search",
-             "cronjob": "scheduled-tasks"}
+SKILL_MAP = {
+    "terminal":       {"id": "shell-execution",    "name": "Shell Execution",       "description": "Execute shell commands and scripts", "examples": ["run tests", "deploy app", "manage processes"], "tags": ["cli", "automation"]},
+    "file":           {"id": "file-operations",    "name": "File Operations",       "description": "Read, write, and manage files", "examples": ["edit config", "create document", "search codebase"], "tags": ["filesystem", "editing"]},
+    "web":            {"id": "web-research",       "name": "Web Research",          "description": "Search and extract web content", "examples": ["find documentation", "check news", "research topic"], "tags": ["internet", "search"]},
+    "browser":        {"id": "browser-automation", "name": "Browser Automation",    "description": "Control web browsers programmatically", "examples": ["fill forms", "scrape data", "screenshot page"], "tags": ["browser", "automation"]},
+    "delegation":     {"id": "task-delegation",    "name": "Task Delegation",       "description": "Delegate work to sub-agents", "examples": ["parallel code review", "multi-agent research"], "tags": ["orchestration", "multi-agent"]},
+    "kanban":         {"id": "kanban-workflow",    "name": "Kanban Workflow",       "description": "Manage multi-step workflows via Kanban board", "examples": ["track project phases", "dispatch parallel tasks"], "tags": ["workflow", "project-management"]},
+    "memory":         {"id": "persistent-memory",  "name": "Persistent Memory",     "description": "Store and recall long-term information", "examples": ["remember user preferences", "track project context"], "tags": ["storage", "context"]},
+    "vision":         {"id": "image-analysis",     "name": "Image Analysis",        "description": "Analyze and describe images", "examples": ["OCR document", "identify objects", "read charts"], "tags": ["vision", "multimodal"]},
+    "image_gen":      {"id": "image-generation",   "name": "Image Generation",      "description": "Generate images from text descriptions", "examples": ["create diagram", "design mockup", "generate art"], "tags": ["generation", "creative"]},
+    "code_execution": {"id": "code-execution",     "name": "Code Execution",        "description": "Execute Python code with tool access", "examples": ["data analysis", "batch processing", "automation scripts"], "tags": ["code", "scripting"]},
+    "session_search": {"id": "session-search",     "name": "Session Search",        "description": "Search past conversation history", "examples": ["recall past decisions", "find previous context"], "tags": ["history", "context"]},
+    "cronjob":        {"id": "scheduled-tasks",    "name": "Scheduled Tasks",       "description": "Schedule recurring background jobs", "examples": ["daily report", "periodic health check", "scheduled sync"], "tags": ["scheduling", "automation"]},
+}
+
+# Base toolsets always available in any Hermes profile (built-in, not in config toolsets list)
+_BASE_TOOLSETS = {"terminal", "file", "web", "browser", "delegation", "kanban",
+                  "memory", "vision", "image_gen", "code_execution", "session_search", "cronjob"}
 
 def generate_agent_card(hermes_home: str) -> dict:
     profile = os.environ.get("HERMES_PROFILE", "default")
     host = os.environ.get("A2A_HOST", "127.0.0.1")
     port = int(os.environ.get("A2A_PORT", "8650"))
     config = _load_config(hermes_home)
-    toolsets = config.get("toolsets", [])
+    config_toolsets = set(config.get("toolsets", [])) - {"hermes-cli", "hermes-telegram"}
+    # If config explicitly declares toolsets (beyond CLI wrappers), use those.
+    # Otherwise, merge base toolsets (main profiles have all built-ins).
+    toolsets = config_toolsets if config_toolsets else _BASE_TOOLSETS
     model = config.get("model", {})
     return {
         "name": f"Hermes Agent — {profile}",
@@ -26,32 +41,22 @@ def generate_agent_card(hermes_home: str) -> dict:
         "capabilities": {"streaming": True, "pushNotifications": False},
         "defaultInputModes": ["text", "file"],
         "defaultOutputModes": ["text", "file"],
-        "skills": [{"id": v, "description": k} for k, v in SKILL_MAP.items() if k in toolsets] + [{"id": "health-check", "description": "Service health and status reporting"}],
+        "skills": [SKILL_MAP[k] for k in SKILL_MAP if k in toolsets] + [
+            {"id": "health-check", "name": "Health Check", "description": "Service health and status reporting",
+             "examples": ["check endpoint status", "verify service health"], "tags": ["monitoring", "infrastructure"]}
+        ],
         "currentModel": {"default": model.get("default", "unknown"), "provider": model.get("provider", "unknown")},
         "version": "0.1.0",
         "protocolVersion": "1.0"
     }
 
 def _load_config(hermes_home: str) -> dict:
+    import yaml
     path = Path(hermes_home) / "config.yaml"
     if not path.exists():
         return {}
-    try:
-        import yaml
-        with open(path) as f:
-            return yaml.safe_load(f) or {}
-    except ImportError:
-        toolsets, model = [], {}
-        with open(path) as f:
-            for line in f:
-                s = line.strip()
-                if s.startswith("- ") and s[2:] not in ("hermes-cli", "hermes-telegram"):
-                    toolsets.append(s[2:])
-                if "default:" in s and "model:" not in line and not s.startswith(" "*4):
-                    model["default"] = s.split(":", 1)[1].strip().strip("'\"")
-                if "provider:" in s and "default:" not in s and "fallback" not in s:
-                    model["provider"] = s.split(":", 1)[1].strip().strip("'\"")
-        return {"toolsets": toolsets, "model": model}
+    with open(path) as f:
+        return yaml.safe_load(f) or {}
 
 def _load_description(hermes_home: str) -> str:
     soul = Path(hermes_home) / "SOUL.md"

@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """A2A HTTP/JSON-RPC Server for Hermes Agent."""
 
-import json, logging, os, uuid
+import json, logging, os, threading, uuid
 from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from agent_card import generate_agent_card
+from task_handler import handle_task
 
 logger = logging.getLogger("hermes-a2a.server")
 HOST = os.environ.get("A2A_HOST", "127.0.0.1")
 PORT = int(os.environ.get("A2A_PORT", "8650"))
 HERMES_HOME = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
+MAX_TASKS = 1000
+TASK_TTL_SECONDS = 3600  # 1 hour
 _tasks: dict = {}
 
 class A2AHandler(BaseHTTPRequestHandler):
@@ -22,8 +25,23 @@ class A2AHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(data, ensure_ascii=False).encode())
 
     def _read_body(self):
-        length = int(self.headers.get("Content-Length", 0))
-        return json.loads(self.rfile.read(length)) if length else {}
+        length_str = self.headers.get("Content-Length", "0")
+        try:
+            length = int(length_str)
+        except (ValueError, TypeError):
+            self._send_json({"error": "invalid Content-Length"}, 400)
+            return None
+        if length < 0 or length > 1_000_000:  # 1MB max
+            self._send_json({"error": "Content-Length out of range"}, 413)
+            return None
+        if length == 0:
+            return {}
+        try:
+            raw = self.rfile.read(length)
+            return json.loads(raw)
+        except (json.JSONDecodeError, Exception) as e:
+            self._send_json({"error": f"invalid JSON: {e}"}, 400)
+            return None
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -47,9 +65,13 @@ class A2AHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path in ("/a2a/tasks", "/a2a/tasks/send"):
             body = self._read_body()
+            if body is None:
+                return  # _read_body already sent error response
             tid = body.get("id") or f"a2a-{uuid.uuid4().hex[:12]}"
             task = {"id": tid, "status": "working", "context_id": body.get("context_id"), "message": body.get("message"), "created_at": datetime.now(timezone.utc).isoformat(), "history": []}
+            _prune_tasks()
             _tasks[tid] = task
+            threading.Thread(target=_execute_task, args=(tid,), daemon=True).start()
             return self._send_json(task, 201)
         self._send_json({"error": "not found"}, 404)
 
@@ -63,6 +85,33 @@ class A2AHandler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         logger.debug(f"{self.client_address[0]} - {fmt % args}")
+
+def _execute_task(tid: str) -> None:
+    """Run task_handler.handle_task in a background thread, update _tasks on completion."""
+    task = _tasks.get(tid)
+    if not task:
+        return
+    try:
+        logger.info(f"[hermes-a2a] executing task {tid}")
+        result = handle_task(task)
+        _tasks[tid] = result
+        logger.info(f"[hermes-a2a] task {tid} → {result.get('status')}")
+    except Exception as e:
+        _tasks[tid]["status"] = "failed"
+        _tasks[tid]["error"] = str(e)
+        logger.error(f"[hermes-a2a] task {tid} failed: {e}")
+
+def _prune_tasks() -> None:
+    """Remove tasks exceeding MAX_TASKS or TASK_TTL_SECONDS."""
+    if len(_tasks) > MAX_TASKS:
+        sorted_ids = sorted(_tasks.keys(), key=lambda tid: _tasks[tid].get("created_at", ""))
+        for old_tid in sorted_ids[: len(_tasks) - MAX_TASKS]:
+            del _tasks[old_tid]
+    now = datetime.now(timezone.utc)
+    expired = [tid for tid, t in _tasks.items()
+               if (now - datetime.fromisoformat(t.get("created_at", "1970-01-01T00:00:00+00:00"))).total_seconds() > TASK_TTL_SECONDS]
+    for tid in expired:
+        del _tasks[tid]
 
 def main():
     server = HTTPServer((HOST, PORT), A2AHandler)

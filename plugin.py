@@ -4,12 +4,12 @@ from pathlib import Path
 
 logger = logging.getLogger("hermes-a2a")
 PLUGIN_NAME, PLUGIN_VERSION = "hermes-a2a", "0.1.0"
-PORT_BASE, PORT_RANGE = 8650, 50
+PORT_BASE, PORT_RANGE = 8650, 300
 _server_proc = None
 
 
 def _stable_port(profile: str) -> int:
-    # sha256 keeps `hash(profile) % 50 + 8650` shape but is deterministic across
+    # sha256 keeps `hash(profile) % 300 + 8650` shape but is deterministic across
     # gateway restarts — Python's built-in hash() is PYTHONHASHSEED-randomized.
     return PORT_BASE + int(hashlib.sha256(profile.encode()).hexdigest(), 16) % PORT_RANGE
 

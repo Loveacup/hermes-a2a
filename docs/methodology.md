@@ -26,11 +26,14 @@
 - HTTP/JSON 传输层与内阁 API 桥接基础完全兼容
 - Python SDK 一行安装，无需额外基础设施
 
-### 为什么全局插件而非 per-profile？
+### 为什么共享代码 + per-profile symlink 而非纯全局插件？
 
-- 15 个 profile 各装一份 = 15 份代码维护。全局一份 = 1 份。
+- 代码一份：`~/.hermes/plugins/hermes-a2a/`（15 profile 共享）
+- 部署：per-profile symlink `~/.hermes/profiles/<name>/plugins/hermes-a2a → ~/.hermes/plugins/hermes-a2a/`
+- 原因：Hermes plugin 加载机制基于 per-profile `plugins/` 目录；symlink 实现代码共享但 profile 独立激活
 - Agent Card 从各 profile 的 config.yaml 自动生成——一个文件搞定所有差异
-- 端口自动分配（hash profile name），无冲突
+- 端口自动分配（hash profile name % 200 + 8650），无碰撞
+- `scripts/seed-a2a-symlinks.sh` 一键创建所有 profile symlink
 
 ### 为什么 HTTP/JSON 先行，JSON-RPC 后补？
 
@@ -60,19 +63,20 @@
 - EmpireThread P4 的心跳 cron 和 capability_snapshot Schema 保留，并入 A2A 的 Agent Card
 - 不装 agentmemory，不 merge Hindsight bank
 
-### ADR-002：全局插件而非 per-profile 部署
+### ADR-002：共享代码 + per-profile symlink 部署
 
 **日期**：2026-05-27
-**状态**：接受
+**状态**：已修订（原为"全局插件"，实测需 per-profile symlink）
 
-**背景**：需要决定插件安装位置。
+**背景**：需要决定插件安装位置。Hermes plugin 加载机制基于 per-profile `plugins/` 目录。
 
-**决策**：安装到 `~/.hermes/plugins/hermes-a2a/`（全局），所有 profile 共享同一份代码。
+**决策**：代码存一份在 `~/.hermes/plugins/hermes-a2a/`，每个 profile 通过 symlink 引用。`scripts/seed-a2a-symlinks.sh` 一键创建。
 
 **理由**：
-- 减少维护负担（1 份 vs 15 份）
+- 减少维护负担（1 份代码 vs 15 份）
 - Agent Card 自动从各 profile config 生成差异部分
-- 端口冲突通过 hash(profile_name) 自动分配
+- 端口碰撞已通过 PORT_RANGE=300 解决（验证 16 profile 零碰撞）
+- 各 profile 可独立 enable/disable
 
 ### ADR-003：HTTP/JSON 先行，JSON-RPC 2.0 后补
 
