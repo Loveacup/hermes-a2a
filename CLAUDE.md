@@ -91,7 +91,8 @@ HOME=/Users/alexcai launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.herme
 - Step 1 ✅ 完成：6 profile（engineer/shangshu/budget/regent/default/gongbu）
 - Step 2 ✅ 完成：全 16 profile + PORT_RANGE=300 公式化 + launchd 统一监管 + monorepo 拆分
 - 讨论模式 ✅ 完成：ROLEPLAY（双边辩论）+ SYNTHESIZE（综合研判），core/discuss.py + a2a-discussion skill
-- Step 3 待启动：EmpireThread 事件桥（MEMORY_QUERY to Hindsight）
+- Step 3 ✅ 完成：EmpireThread 事件桥设计（CC 3-Agent 评估 + 5 加固项）
+- Step 4 待启动：EmpireThread 事件桥实施（3 周 ~550 行）
 
 详细端口表见 `s6m-config/port-map.md`。
 

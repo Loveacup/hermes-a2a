@@ -242,7 +242,8 @@ hermes-a2a connects the following key roles in the 三省六部 governance syste
 - [x] **v0.2.0:** Capability-based dispatcher (CN/EN keyword scoring) · 能力分发
 - [x] **v0.2.0:** Observability — `/a2a/metrics`, `/gateway/metrics`, structured logging · 可观测性
 - [x] **v0.2.0:** Audit score hook — completion, speed, semantic, consistency scoring · 审计评分
-- [ ] **Step 3:** EmpireThread event bridge (MEMORY_QUERY → Hindsight) · 事件桥
+- [x] **Step 3:** EmpireThread event bridge — design complete (CC 3-Agent evaluation + 5 hardening items) · 事件桥设计完成
+- [ ] **Step 4:** EmpireThread event bridge — implementation (3 weeks, ~550 lines) · 事件桥实施
 
 ---
 
@@ -254,6 +255,8 @@ hermes-a2a connects the following key roles in the 三省六部 governance syste
 | [s6m-config/README.md](s6m-config/README.md) | System operators, deployment · 运维部署 |
 | [s6m-config/docs/methodology.md](s6m-config/docs/methodology.md) | Architecture decisions (ADR-001~004) · 架构决策 |
 | [s6m-config/docs/s6m-a2a-optimization.md](s6m-config/docs/s6m-a2a-optimization.md) | Optimization roadmap · 优化方案 |
+| [s6m-config/docs/Hermes_路线图_v1.0.md](s6m-config/docs/Hermes_路线图_v1.0.md) | 🆕 Overall roadmap (5 directions + priorities) · 总体路线图 |
+| [s6m-config/docs/EmpireThread_事件桥_综合设计文档_v1.0.md](s6m-config/docs/EmpireThread_事件桥_综合设计文档_v1.0.md) | 🆕 EmpireThread event bridge full design · 事件桥综合设计 |
 | [s6m-config/docs/audits/](s6m-config/docs/audits/) | Audit trail · 审计历史 |
 | [CLAUDE.md](CLAUDE.md) | AI agent collaboration guide · AI 协作指南 |
 
