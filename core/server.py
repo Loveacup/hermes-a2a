@@ -239,7 +239,7 @@ def _execute_task(tid: str) -> None:
         result["artifact"]["timeout_s"] = task.get("timeout_s", TASK_TIMEOUT_DEFAULT)
         result["artifact"]["actual_duration_s"] = round(_time.monotonic() - t_start, 3)
         try:
-            score_task(result)
+            result["artifact"]["audit_score"] = score_task(result)
         except Exception:
             logger.exception("[hermes-a2a] score_task failed for %s", tid)
         _store.save(result)
