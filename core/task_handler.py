@@ -141,8 +141,8 @@ def _classify(status: str, response: str, error: str = "") -> dict:
 
 def handle_task(task: dict) -> dict:
     tid = task.get("id", "unknown")
-    msg = task.get("message", {})
-    prompt = msg if isinstance(msg, str) else (msg.get("text") or _extract_from_parts(msg.get("parts", [])))
+    msg = task.get("message") or task.get("input") or task.get("action") or {}
+    prompt = msg if isinstance(msg, str) else (msg.get("text") or msg.get("prompt") or _extract_from_parts(msg.get("parts", [])))
     if not prompt:
         task["status"] = "failed"
         task["error"] = "Empty message"
