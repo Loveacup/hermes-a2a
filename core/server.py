@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -45,6 +46,22 @@ _DB_PATH = Path(HERMES_HOME) / "data" / f"a2a-{os.environ.get('HERMES_PROFILE','
 _store = TaskStore(_DB_PATH, max_tasks=MAX_TASKS, ttl_seconds=TASK_TTL_SECONDS)
 _token = load_or_create_token(HERMES_HOME)
 _exec_lock = threading.Lock()  # guards _store.save+spawn against double-execute races
+
+# Observability counters (P3 metrics endpoint). Process-local, reset on restart.
+_start_time = time.monotonic()
+_metrics_lock = threading.Lock()
+_metrics = {
+    "requests_total": 0,
+    "rate_limited": 0,
+    "tasks_completed": 0,
+    "tasks_failed": 0,
+    "tasks_working": 0,
+}
+
+
+def _inc(key: str, delta: int = 1) -> None:
+    with _metrics_lock:
+        _metrics[key] = _metrics.get(key, 0) + delta
 
 
 class A2AHandler(BaseHTTPRequestHandler):
@@ -115,6 +132,18 @@ class A2AHandler(BaseHTTPRequestHandler):
         if not self._auth_or_reject():
             return
 
+        # GET /a2a/metrics — observability counters (P3)
+        if path == "/a2a/metrics":
+            with _metrics_lock:
+                snapshot = dict(_metrics)
+            snapshot["profile"] = os.environ.get("HERMES_PROFILE", "default")
+            snapshot["uptime_s"] = int(time.monotonic() - _start_time)
+            try:
+                snapshot["a2a_tasks_stored"] = _store.count()
+            except Exception:
+                snapshot["a2a_tasks_stored"] = -1
+            return self._send_json(snapshot)
+
         # GET /a2a/tasks — list tasks (P0-8 Step 1)
         if path == "/a2a/tasks":
             limit, status = self._parse_list_query()
@@ -156,9 +185,15 @@ class A2AHandler(BaseHTTPRequestHandler):
 
     # ── POST routes ─────────────────────────────────────────────────
     def do_POST(self) -> None:
+        _inc("requests_total")
         profile_id = os.environ.get("HERMES_PROFILE", "default")
         allowed, retry_after = DEFAULT_LIMITER.check(profile_id)
         if not allowed:
+            _inc("rate_limited")
+            logger.info(
+                "event=rate_limited profile=%s retry_after=%d",
+                profile_id, int(retry_after) or 1,
+            )
             body = json.dumps(
                 {"error": "rate_limited", "retry_after": retry_after},
                 ensure_ascii=False,
@@ -193,6 +228,7 @@ class A2AHandler(BaseHTTPRequestHandler):
             with _exec_lock:
                 _store.save(task)
                 _store.prune()
+                _inc("tasks_working")
                 threading.Thread(
                     target=_execute_task, args=(tid,), daemon=True,
                 ).start()
@@ -226,42 +262,56 @@ def _resolve_timeout(message) -> int:
 
 def _execute_task(tid: str) -> None:
     """Run task_handler.handle_task in a background thread, persist result."""
-    import time as _time
     task = _store.get(tid)
     if not task:
+        _inc("tasks_working", -1)
         return
-    t_start = _time.monotonic()
+    profile = os.environ.get("HERMES_PROFILE", "default")
+    t_start = time.monotonic()
     try:
-        logger.info("[hermes-a2a] executing task %s", tid)
+        logger.info("event=task_start task_id=%s profile=%s", tid, profile)
         result = handle_task(task)
         if not isinstance(result.get("artifact"), dict):
             result["artifact"] = {}
         result["artifact"]["timeout_s"] = task.get("timeout_s", TASK_TIMEOUT_DEFAULT)
-        result["artifact"]["actual_duration_s"] = round(_time.monotonic() - t_start, 3)
+        dur_ms = int((time.monotonic() - t_start) * 1000)
+        result["artifact"]["actual_duration_s"] = round(dur_ms / 1000, 3)
         try:
             result["artifact"]["audit_score"] = score_task(result)
         except Exception:
-            logger.exception("[hermes-a2a] score_task failed for %s", tid)
+            logger.exception(
+                "event=score_task_error task_id=%s profile=%s", tid, profile,
+            )
         _store.save(result)
+        status = result.get("status", "?")
+        if status == "completed":
+            _inc("tasks_completed")
+        else:
+            _inc("tasks_failed")
+        _inc("tasks_working", -1)
         logger.info(
-            "[hermes-a2a] task %s → %s [%s/%s]",
-            tid,
-            result.get("status"),
+            "event=task_complete task_id=%s profile=%s status=%s semantic=%s reason=%s dur_ms=%d",
+            tid, profile, status,
             result.get("semantic_status", "?"),
             result.get("completion_reason", "?"),
+            dur_ms,
         )
     except Exception as e:  # pragma: no cover — defensive
         task["status"] = "failed"
         task["error"] = str(e)
         _store.save(task)
-        logger.exception("[hermes-a2a] task %s failed", tid)
+        _inc("tasks_failed")
+        _inc("tasks_working", -1)
+        logger.exception(
+            "event=task_failed task_id=%s profile=%s error=%s", tid, profile, e,
+        )
 
 
 def main() -> None:
     server = ThreadingHTTPServer((HOST, PORT), A2AHandler)
     server.daemon_threads = True
     logger.info(
-        "[hermes-a2a] http://%s:%d | profile=%s db=%s",
+        "event=server_start host=%s port=%d profile=%s db=%s",
         HOST, PORT, os.environ.get("HERMES_PROFILE", "default"), _DB_PATH,
     )
     try:

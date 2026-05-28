@@ -201,6 +201,18 @@ class TaskStore:
             rows = cur.fetchall()
         return [self._row_to_task(r) for r in rows]
 
+    def count(self, status: str | None = None) -> int:
+        """Return total task count, optionally filtered by ``status``."""
+        sql = "SELECT COUNT(*) FROM tasks"
+        params: tuple[Any, ...] = ()
+        if status is not None:
+            sql += " WHERE status = ?"
+            params = (status,)
+        with self._lock:
+            cur = self._conn.execute(sql, params)
+            row = cur.fetchone()
+        return int(row[0]) if row else 0
+
     def delete(self, task_id: str) -> bool:
         """Delete one task. Returns ``True`` if the row existed."""
         with self._lock:

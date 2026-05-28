@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -19,6 +20,19 @@ _HOP_HEADERS = frozenset({
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
     "te", "trailers", "transfer-encoding", "upgrade", "host", "content-length",
 })
+
+# Observability counters (P3). Process-local, reset on restart.
+_start_time = time.monotonic()
+_metrics_lock = threading.Lock()
+_metrics = {
+    "proxied_requests": 0,
+    "backend_errors": 0,
+}
+
+
+def _inc(key: str, delta: int = 1) -> None:
+    with _metrics_lock:
+        _metrics[key] = _metrics.get(key, 0) + delta
 
 
 def load_port_map(path: str) -> dict[str, int]:
@@ -77,6 +91,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if self.path == "/health" and method == "GET":
             self._send_json(200, {"status": "ok", "service": "hermes-a2a-gateway", "profiles": len(self.routes)})
             return
+        if self.path == "/gateway/metrics" and method == "GET":
+            with _metrics_lock:
+                snapshot = dict(_metrics)
+            snapshot["uptime_s"] = int(time.monotonic() - _start_time)
+            snapshot["profiles"] = len(self.routes)
+            self._send_json(200, snapshot)
+            return
         parsed = self._parse_a2a_path()
         if parsed is None:
             self._send_json(404, {"error": "not_found", "path": self.path})
@@ -101,6 +122,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
         target = f"http://127.0.0.1:{port}/a2a{rest}"
         headers = self._build_headers()
         status, resp_headers, resp_body = self._forward(target, method, body, headers)
+        _inc("proxied_requests")
+        if status >= 500:
+            _inc("backend_errors")
         self.send_response(status)
         ctype = resp_headers.get("Content-Type") or resp_headers.get("content-type") or "application/json"
         self.send_header("Content-Type", ctype)
@@ -108,8 +132,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(resp_body)
         dur_ms = int((time.monotonic() - t0) * 1000)
-        logger.info("gateway: profile=%s path=%s method=%s status=%s dur_ms=%d",
-                    profile, self.path, method, status, dur_ms)
+        logger.info(
+            "event=proxy profile=%s path=%s method=%s status=%d dur_ms=%d",
+            profile, self.path, method, status, dur_ms,
+        )
 
     def do_GET(self) -> None:
         self._proxy("GET")
@@ -125,11 +151,11 @@ def main() -> None:
     map_path = os.environ.get("PORT_MAP_PATH", default_map)
     routes = load_port_map(map_path)
     GatewayHandler.routes = routes
-    logger.info("gateway: loaded %d routes from %s", len(routes), map_path)
+    logger.info("event=routes_loaded count=%d source=%s", len(routes), map_path)
     for profile in sorted(routes):
-        logger.info("gateway: route %-14s -> 127.0.0.1:%d", profile, routes[profile])
+        logger.info("event=route profile=%s target=127.0.0.1:%d", profile, routes[profile])
     server = ThreadingHTTPServer((host, port), GatewayHandler)
-    logger.info("gateway: listening on %s:%d", host, port)
+    logger.info("event=gateway_start host=%s port=%d", host, port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
