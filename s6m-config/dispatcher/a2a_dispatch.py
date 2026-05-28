@@ -68,12 +68,18 @@ _CN_EN_MAP = {
     "设计": ["design", "architecture", "plan", "blueprint"],
 }
 
-def _expand_cn_tokens(tokens: set[str]) -> set[str]:
-    """Expand Chinese tokens to English synonyms for cross-language matching."""
+def _expand_cn_tokens(desc: str, tokens: set[str]) -> set[str]:
+    """Scan desc for CN_EN_MAP keys as substrings, inject English synonyms.
+
+    Chinese has no word boundaries, so regex tokenization returns whole runs
+    (e.g. "\u5ba1\u67e5\u4e00\u6bb5\u4ee3\u7801\u7684\u5b89\u5168\u6027" \u2192 one token). Substring scan recovers embedded
+    concepts (\u5ba1\u67e5/\u4ee3\u7801/\u5b89\u5168) and adds their English equivalents to the match space.
+    """
     expanded = set(tokens)
-    for t in tokens:
-        if t in _CN_EN_MAP:
-            expanded.update(_CN_EN_MAP[t])
+    for cn_key, en_synonyms in _CN_EN_MAP.items():
+        if cn_key in desc:
+            expanded.add(cn_key)
+            expanded.update(en_synonyms)
     return expanded
 
 
@@ -82,7 +88,7 @@ def score(task_desc: str, card: dict) -> tuple[float, str]:
     name = (card.get("name") or "").lower()
     descr = (card.get("description") or "").lower()
     raw_tokens = set(re.findall(r"[a-z0-9]{2,}|[\u4e00-\u9fff]{2,}", desc_lower))
-    tokens = _expand_cn_tokens(raw_tokens) if raw_tokens else set()
+    tokens = _expand_cn_tokens(task_desc, raw_tokens)
     if not tokens:
         kw_score = 0.0
         kw_hits: list[str] = []
