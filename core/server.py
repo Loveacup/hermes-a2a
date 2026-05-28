@@ -35,6 +35,7 @@ from auth import (
 from rate_limiter import DEFAULT_LIMITER
 from audit_hook import score_task, maybe_alert
 import registry as _registry
+import paths
 
 logger = logging.getLogger("hermes-a2a.server")
 
@@ -133,7 +134,7 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "profile": os.environ.get("HERMES_PROFILE", "default"),
             })
         if path == "/a2a/.well-known/agent-card.json":
-            return self._send_json(generate_agent_card(HERMES_HOME))
+            return self._send_json(generate_agent_card(str(paths.hermes_root())))
 
         # Protected endpoints.
         if not self._auth_or_reject():
