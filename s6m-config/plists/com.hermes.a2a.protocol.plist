@@ -6,7 +6,7 @@
     <string>com.hermes.a2a.protocol</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Library/Developer/CommandLineTools/usr/bin/python3</string>
+        <string>/Users/alexcai/.hermes/hermes-agent/venv/bin/python3</string>
         <string>/Users/alexcai/.hermes/plugins/hermes-a2a/server.py</string>
     </array>
     <key>WorkingDirectory</key>
