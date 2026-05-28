@@ -6,14 +6,19 @@ Hermes Agent 的 A2A (Agent-to-Agent) 协议插件内核。基于 [Google A2A Pr
 
 ## 文件清单
 
-- `plugin.py` — Hermes 插件入口 (`register()`)。被 gateway 加载时调起，spawn `server.py` 子进程
-- `server.py` — A2A HTTP Server，stdlib HTTPServer，路由 `/health`、`/a2a/.well-known/agent-card.json`、`/a2a/tasks` (POST/GET)、`/a2a/tasks/{id}/stream` (SSE)
+- `plugin.py` — Hermes 插件入口 (`register()`)。被 gateway 加载时调起，spawn `server.py` 子进程；启动前通过 registry 自动清理旧进程防止僵尸泄漏
+- `server.py` — A2A HTTP Server，stdlib HTTPServer，路由 `/health`、`/a2a/.well-known/agent-card.json`、`/a2a/tasks` (POST/GET)、`/a2a/tasks/{id}/stream` (SSE)；启动时自动注册端口信息到 registry
 - `agent_card.py` — 从 profile 的 `config.yaml` + `SOUL.md` + SKILL_MAP 自动生成 A2A 1.0 spec 的 Agent Card
-- `task_handler.py` — 双模 task 执行：profile 在 `_API_SERVER_PORTS` 映射里 → 走 Hermes 原生 `/v1/runs`；否则 → fallback 到 `hermes chat -q` subprocess
+- `task_handler.py` — 双模 task 执行：profile 在 `_API_SERVER_PORTS` 映射里 → 走 Hermes 原生 `/v1/runs`；否则 → fallback 到 `hermes chat -q` subprocess。identity prefix 已改为 profile-aware
+- `auth.py` — Token 认证：`load_or_create_token()` 读/写共享 `~/.hermes/.a2a-token`（所有 profile 共用，重启不重新生成）
+- `registry.py` — 端口注册表（fcntl 锁 + JSON），提供 `upsert` / `remove` / `kill_stale` / CLI (`get`/`port`/`cleanup`)。server.py 启动 upsert，退出 remove；plugin.py 启动前 kill_stale 收割僵尸
+- `paths.py` — 共享路径解析，透传 HOME 劫持定位真实 `~/.hermes/`
+- `a2a_dispatch.py` — A2A 讨论调度器（auto_discuss 分类引擎），824 行含预编译正则 + hit_groups 追踪 + 36 条自测
+- `discuss.py` — 讨论编排引擎（ROLEPLAY + SYNTHESIZE 双模式）
 - `plugin.yaml` — 插件元数据 (name / version / kind / author / homepage / license)
 - `requirements.txt` — `pyyaml`（只此一个依赖）
 - `templates/a2a-launchd.plist` — macOS launchd 服务模板（`{{PROFILE}}` / `{{PORT}}` / `{{HERMES_HOME}}` 占位符）
-- `scripts/hermes-a2a-doctor.sh` — 健康聚合器，可读 port-map 文件做参数化检查
+- `scripts/hermes-a2a-doctor.sh` — 健康聚合器（8 项检查：python解释器 / fallback自指 / 端口唯一性 / HOME泄漏 / drift / provider key / send_message / identity prefix），支持 `--json` 输出
 - `scripts/seed-a2a-symlinks.sh` — per-profile symlink 一键创建（Hermes 在非 default profile 下扫描 `~/.hermes/profiles/<name>/plugins/`，需用 symlink 让 plugin 全局共享）
 
 ## 端口分配
