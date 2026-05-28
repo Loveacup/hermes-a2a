@@ -27,7 +27,7 @@ from auth import (
     load_or_create_token,
 )
 from rate_limiter import DEFAULT_LIMITER
-from audit_hook import score_task
+from audit_hook import score_task, maybe_alert
 
 logger = logging.getLogger("hermes-a2a.server")
 
@@ -281,6 +281,13 @@ def _execute_task(tid: str) -> None:
         except Exception:
             logger.exception(
                 "event=score_task_error task_id=%s profile=%s", tid, profile,
+            )
+        # Low-score alert (best-effort, never blocks task completion)
+        try:
+            maybe_alert(result)
+        except Exception:
+            logger.exception(
+                "event=alert_error task_id=%s profile=%s", tid, profile,
             )
         _store.save(result)
         status = result.get("status", "?")

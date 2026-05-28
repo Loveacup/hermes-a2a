@@ -294,6 +294,50 @@ def score_task(task: dict) -> dict:
     return task["audit_score"]
 
 
+# ---------------------------------------------------------------------------
+# Low-score alerting (审计全闭环)
+# ---------------------------------------------------------------------------
+
+ALERT_THRESHOLD = 0.4          # overall below this → alert
+ALERT_COOLDOWN_S = 300          # max 1 per 5 min
+ALERT_ASSIGNEE = "auditor"
+
+_alerted_tasks: set[str] = set()
+_last_alert_ts: float = 0.0
+
+
+def maybe_alert(task: dict) -> dict | None:
+    """Check score; alert + Kanban card if below threshold."""
+    score = (task.get("audit_score") or {}).get("overall")
+    if score is None or score >= ALERT_THRESHOLD:
+        return None
+    tid = task.get("id", "")
+    if tid in _alerted_tasks:
+        return None
+    import time as _t
+    global _last_alert_ts
+    now = _t.time()
+    if now - _last_alert_ts < ALERT_COOLDOWN_S:
+        return None
+    _alerted_tasks.add(tid)
+    _last_alert_ts = now
+    dims = task.get("audit_score", {})
+    msg = (
+        f"⚠️ 审计告警\nTask: {tid}\nScore: {score} (threshold={ALERT_THRESHOLD})\n"
+        f"exec={dims.get('execution')} acc={dims.get('accuracy')} "
+        f"comp={dims.get('compliance')}\n"
+        f"status={task.get('status')} semantic={task.get('semantic_status')}"
+    )
+    import subprocess as _sp
+    _sp.run(["hermes","-p","regent","send","-t","telegram:7931997806",msg],
+            timeout=10, capture_output=True)
+    _sp.run(["hermes","-p","regent","kanban","create",
+             f"audit-review-{tid[:8]}","--assignee",ALERT_ASSIGNEE,
+             "--body", f"审计低分复审 task={tid} score={score}"],
+            timeout=10, capture_output=True)
+    return {"task_id": tid, "score": score, "alerted": True}
+
+
 __all__ = [
     "AuditGate",
     "DEFAULT_GATE",
