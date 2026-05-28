@@ -250,10 +250,55 @@ def next_depth_headers(headers: Mapping[str, str] | None = None) -> dict[str, st
 DEFAULT_GATE = AuditGate()
 
 
+# ---------------------------------------------------------------------------
+# Task scoring (score-only mode, P0-4 follow-up)
+# ---------------------------------------------------------------------------
+
+def score_task(task: dict) -> dict:
+    """4-dimensional task quality score (0.0-1.0 each); writes task['audit_score'].
+
+    Dimensions:
+        execution   — based on status (completed=1.0, failed=0.0, working=0.5)
+        accuracy    — based on semantic_status (succeeded=1.0, degraded=0.6, failed=0.0)
+        compliance  — heuristic on response length & artifact presence
+        retry_eff   — placeholder 1.0 (no retry tracking yet); reduces when error present
+
+    Score-only mode: never alerts, retries, or escalates. Just observes.
+    """
+    artifact = task.get("artifact") if isinstance(task.get("artifact"), dict) else {}
+
+    status = task.get("status", "")
+    execution = {"completed": 1.0, "failed": 0.0}.get(status, 0.5)
+
+    sem = task.get("semantic_status", "")
+    accuracy = {"succeeded": 1.0, "degraded": 0.6, "failed": 0.0}.get(sem, 0.5)
+
+    response = artifact.get("response", "") or artifact.get("fallback_text", "")
+    if isinstance(response, str) and len(response.strip()) >= 10:
+        compliance = 1.0 if artifact else 0.7
+    else:
+        compliance = 0.3
+
+    retry_eff = 0.5 if task.get("error") else 1.0
+
+    overall = round((execution + accuracy + compliance + retry_eff) / 4, 3)
+
+    task["audit_score"] = {
+        "overall": overall,
+        "execution": round(execution, 3),
+        "accuracy": round(accuracy, 3),
+        "compliance": round(compliance, 3),
+        "retry_eff": round(retry_eff, 3),
+        "mode": "score_only",
+    }
+    return task["audit_score"]
+
+
 __all__ = [
     "AuditGate",
     "DEFAULT_GATE",
     "DEPTH_HEADER",
     "audit_depth",
     "next_depth_headers",
+    "score_task",
 ]

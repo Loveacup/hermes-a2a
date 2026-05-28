@@ -25,6 +25,8 @@ from auth import (
     is_public_path,
     load_or_create_token,
 )
+from rate_limiter import DEFAULT_LIMITER
+from audit_hook import score_task
 
 logger = logging.getLogger("hermes-a2a.server")
 
@@ -33,6 +35,8 @@ PORT = int(os.environ.get("A2A_PORT", "8650"))
 HERMES_HOME = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
 MAX_TASKS = int(os.environ.get("A2A_MAX_TASKS", "1000"))
 TASK_TTL_SECONDS = int(os.environ.get("A2A_TASK_TTL", "3600"))  # 1 hour
+TASK_TIMEOUT_DEFAULT = int(os.environ.get("A2A_TASK_TIMEOUT", "30"))
+TASK_TIMEOUT_CHAIN = int(os.environ.get("A2A_TASK_TIMEOUT_CHAIN", "120"))
 MAX_BODY_BYTES = 1_000_000  # 1 MB
 
 # SQLite path per profile so concurrent profile processes don't share state.
@@ -152,6 +156,22 @@ class A2AHandler(BaseHTTPRequestHandler):
 
     # ── POST routes ─────────────────────────────────────────────────
     def do_POST(self) -> None:
+        profile_id = os.environ.get("HERMES_PROFILE", "default")
+        allowed, retry_after = DEFAULT_LIMITER.check(profile_id)
+        if not allowed:
+            body = json.dumps(
+                {"error": "rate_limited", "retry_after": retry_after},
+                ensure_ascii=False,
+            ).encode()
+            self.send_response(429)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Retry-After", str(int(retry_after) or 1))
+            self._set_cors()
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if not self._auth_or_reject():
             return
 
@@ -166,6 +186,7 @@ class A2AHandler(BaseHTTPRequestHandler):
                 "status": "working",
                 "context_id": body.get("context_id"),
                 "message": body.get("message"),
+                "timeout_s": _resolve_timeout(body.get("message")),
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "history": [],
             }
@@ -193,14 +214,34 @@ class A2AHandler(BaseHTTPRequestHandler):
         logger.debug("%s - %s", self.client_address[0], fmt % args)
 
 
+def _resolve_timeout(message) -> int:
+    if isinstance(message, dict):
+        explicit = message.get("timeout")
+        if isinstance(explicit, (int, float)) and explicit > 0:
+            return min(int(explicit), 3600)
+        if message.get("chain") or message.get("chain_call"):
+            return TASK_TIMEOUT_CHAIN
+    return TASK_TIMEOUT_DEFAULT
+
+
 def _execute_task(tid: str) -> None:
     """Run task_handler.handle_task in a background thread, persist result."""
+    import time as _time
     task = _store.get(tid)
     if not task:
         return
+    t_start = _time.monotonic()
     try:
         logger.info("[hermes-a2a] executing task %s", tid)
         result = handle_task(task)
+        if not isinstance(result.get("artifact"), dict):
+            result["artifact"] = {}
+        result["artifact"]["timeout_s"] = task.get("timeout_s", TASK_TIMEOUT_DEFAULT)
+        result["artifact"]["actual_duration_s"] = round(_time.monotonic() - t_start, 3)
+        try:
+            score_task(result)
+        except Exception:
+            logger.exception("[hermes-a2a] score_task failed for %s", tid)
         _store.save(result)
         logger.info(
             "[hermes-a2a] task %s → %s [%s/%s]",

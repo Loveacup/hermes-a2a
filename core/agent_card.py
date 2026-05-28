@@ -51,12 +51,19 @@ def generate_agent_card(hermes_home: str) -> dict:
     }
 
 def _load_config(hermes_home: str) -> dict:
-    import yaml
     path = Path(hermes_home) / "config.yaml"
     if not path.exists():
         return {}
-    with open(path) as f:
-        return yaml.safe_load(f) or {}
+    try:
+        import yaml
+    except ImportError:
+        return {}
+    try:
+        with open(path) as f:
+            data = yaml.safe_load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
 
 def _load_description(hermes_home: str) -> str:
     soul = Path(hermes_home) / "SOUL.md"
