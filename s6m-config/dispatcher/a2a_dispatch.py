@@ -45,11 +45,44 @@ def discover_all(force: bool = False) -> dict[str, dict]:
     return cards
 
 
+_CN_EN_MAP = {
+    "部署": ["deploy", "deployment", "release", "launch", "ship"],
+    "代码": ["code", "coding", "programming", "developer"],
+    "安全": ["security", "audit", "secure", "vulnerability"],
+    "审查": ["review", "audit", "inspect", "check"],
+    "财务": ["finance", "financial", "budget", "accounting"],
+    "数据": ["data", "analysis", "analytics", "statistics"],
+    "服务": ["service", "server", "api", "backend"],
+    "测试": ["test", "testing", "qa", "quality"],
+    "监控": ["monitor", "monitoring", "watch", "observe"],
+    "日志": ["log", "logging", "trace"],
+    "优化": ["optimize", "optimization", "performance"],
+    "修复": ["fix", "repair", "bugfix", "patch"],
+    "配置": ["config", "configuration", "setup", "settings"],
+    "数据库": ["database", "sql", "storage", "postgres"],
+    "网络": ["network", "http", "dns", "proxy"],
+    "前端": ["frontend", "ui", "react", "vue", "web"],
+    "后端": ["backend", "api", "server", "service"],
+    "运维": ["devops", "infra", "operations", "deploy"],
+    "文档": ["docs", "documentation", "write", "readme"],
+    "设计": ["design", "architecture", "plan", "blueprint"],
+}
+
+def _expand_cn_tokens(tokens: set[str]) -> set[str]:
+    """Expand Chinese tokens to English synonyms for cross-language matching."""
+    expanded = set(tokens)
+    for t in tokens:
+        if t in _CN_EN_MAP:
+            expanded.update(_CN_EN_MAP[t])
+    return expanded
+
+
 def score(task_desc: str, card: dict) -> tuple[float, str]:
     desc_lower = task_desc.lower()
     name = (card.get("name") or "").lower()
     descr = (card.get("description") or "").lower()
-    tokens = set(re.findall(r"[a-z0-9]+|[一-鿿]", desc_lower))
+    raw_tokens = set(re.findall(r"[a-z0-9]{2,}|[\u4e00-\u9fff]{2,}", desc_lower))
+    tokens = _expand_cn_tokens(raw_tokens) if raw_tokens else set()
     if not tokens:
         kw_score = 0.0
         kw_hits: list[str] = []
@@ -59,6 +92,15 @@ def score(task_desc: str, card: dict) -> tuple[float, str]:
         kw_score = min(1.0, len(hits) / max(3, len(tokens)))
         kw_hits = hits[:5]
     skills = card.get("skills", [])
+    # Build extended hay from skill fields for keyword matching
+    skill_hay = " ".join(
+        s.get("id", "") + " " + s.get("name", "") + " " + s.get("description", "")
+        for s in skills
+    ).lower()
+    if skill_hay:
+        skill_hits = [t for t in tokens if t in skill_hay]
+        kw_score = max(kw_score, min(1.0, len(skill_hits) / max(3, len(tokens))))
+        kw_hits = list(dict.fromkeys(kw_hits + skill_hits))[:5]
     matched_skills = []
     for s in skills:
         skill_blob = " ".join([
