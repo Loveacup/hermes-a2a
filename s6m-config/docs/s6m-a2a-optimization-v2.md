@@ -416,6 +416,65 @@ P0-6 + P0-7 拆 core ↔ s6m-config 边界 · P1-2 可观测性三层 · P1-3 ca
 ### Phase 4 — 持续运营
 P2-* 工程化项 + E-3/E-5 触发性升级
 
+---
+
+## 外部参考：MedFlow 医疗AI编排平台
+
+> 来源：Obsidian `10-Projects/10_艾大力/医疗AI编排平台与万能连接件-完整产品方案.md`
+> 
+> MedFlow 是面向医院场景的 AI 编排平台（TS 栈），其 Unla MCP Gateway + Inngest 编排模型与 hermes-a2a 有架构层面的可类比性。以下 3 项经评估可直接借鉴。
+
+### R1 — 统一 A2A Gateway（参考 Unla MCP Gateway）
+
+**MedFlow 做法**：Unla Gateway 作为所有 MCP 流量的单一入口，内置认证、审计、限流。
+
+**映射到 hermes-a2a**：将 `registry:8928` 定位为 A2A 统一 Gateway。
+- 汇聚 Bearer token 认证（所有 A2A 请求先过 Gateway）
+- 统一请求/响应审计日志（写回 SQLite `_store`）
+- 统一 rate limiter（见 R2）
+- 其余 15 个 profile 的 A2A 端点改为仅监听 localhost（不对外暴露）
+
+**关联**：Phase 3 P1-3（caller ACL）的原型——Gateway 集中管控比 per-profile ACL 更简洁。
+
+**实施**：`core/gateway.py`（~150 行）→ `registry:8928` 监听 → 内部路由表 `{profile: http://127.0.0.1:{port}}`。
+
+### R2 — Per-profile Rate Limiter（参考 Unla 令牌桶）
+
+**MedFlow 做法**：Unla 内置令牌桶限流，支持按租户配额。
+
+**映射到 hermes-a2a**：在 `server.py` 的 `do_POST` 前加 per-profile 令牌桶。
+- 纯 stdlib 实现（`collections.deque` + 时间窗口），不引入外部依赖
+- 默认策略：每 profile 最多 10 req/s，burst 到 20
+- 超限返回 `429 Too Many Requests` + `Retry-After` header
+
+**关联**：audit_hook 四道防线的第 4 道（rate limit）的具体实现。
+
+**实施**：`core/rate_limiter.py`（~40 行）→ server.py wiring（~5 行）。
+
+### R3 — Step 编排模型（参考 Inngest step.run/sleep/waitForEvent）
+
+**MedFlow 做法**：Inngest 的声明式 step 编排——`step.run` → `step.sleep` → `step.ai` → `step.waitForEvent`，每个 step 是独立函数，编排层只负责调度和状态机。
+
+**映射到 hermes-a2a**：Phase 3 的 P1-6（discuss.py God Module 拆分）可参考此抽象。
+- 将 discuss.py 的 898 行拆为 `steps/` 子模块：`start_debate` / `synthesize` / `timeout_handler` / `artifact_merge`
+- 编排层（`orchestrator.py`）只管 step 调度 + 状态机，不涉业务逻辑
+- 每个 step 幂等、可重试、有独立超时
+
+**注意**：不引入 Inngest SDK（TS 栈），仅借鉴抽象模式。纯 Python 实现。
+
+**关联**：P1-6 discuss god module 拆分 + P1-2 可观测性（step 粒度天然适合 tracing）。
+
+### 其他参考（仅归档，不纳入计划）
+
+| MedFlow 设计 | hermes-a2a 对比 | 结论 |
+|---|---|---|
+| Unla 画布编排（低代码） | 纯 agent 通信，不需要可视化编排 | 不适用 |
+| TS 全栈（Inngest + Unla 均为 TS） | Python 栈 | 技术栈不同，不直接复用代码 |
+| 渐进式 mock→real 迁移 | Phase 3 扩展余下 11 profile 可复用 | 纯方法论，不进入文档 |
+| 多租户 ISV 模型 | per-profile 进程隔离已够用 | 不适用 |
+
+---
+
 ## 明确不做的事
 
 1. **不引入 a2a-sdk Python 包**——会拖入 fastapi + pydantic + uvicorn 一堆传递依赖，违反 "core 只依赖 pyyaml" 原则
