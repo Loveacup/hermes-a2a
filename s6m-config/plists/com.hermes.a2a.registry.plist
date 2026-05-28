@@ -6,19 +6,19 @@
     <string>com.hermes.a2a.registry</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Library/Developer/CommandLineTools/usr/bin/python3</string>
-        <string>/Users/alexcai/.hermes/plugins/hermes-a2a/server.py</string>
+        <string>/opt/homebrew/bin/python3</string>
+        <string>/Users/alexcai/.hermes/plugins/hermes-a2a/gateway.py</string>
     </array>
     <key>WorkingDirectory</key>
     <string>/Users/alexcai/.hermes/plugins/hermes-a2a</string>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>HERMES_PROFILE</key>
-        <string>registry</string>
-        <key>A2A_PORT</key>
+        <key>GATEWAY_HOST</key>
+        <string>127.0.0.1</string>
+        <key>GATEWAY_PORT</key>
         <string>8928</string>
-        <key>HERMES_HOME</key>
-        <string>/Users/alexcai/.hermes/profiles/registry</string>
+        <key>PORT_MAP_PATH</key>
+        <string>/Users/alexcai/code/hermes-a2a/s6m-config/port-map.md</string>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     </dict>
@@ -29,9 +29,9 @@
     <key>RunAtLoad</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/tmp/a2a-registry-8928.log</string>
+    <string>/Users/alexcai/.hermes/logs/a2a-registry.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/a2a-registry-8928.err</string>
+    <string>/Users/alexcai/.hermes/logs/a2a-registry.err</string>
     <key>ProcessType</key>
     <string>Background</string>
 </dict>
