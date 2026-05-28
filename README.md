@@ -244,6 +244,8 @@ hermes-a2a connects the following key roles in the 三省六部 governance syste
 - [x] **v0.2.0:** Audit score hook — completion, speed, semantic, consistency scoring · 审计评分
 - [x] **Step 3:** EmpireThread event bridge — design complete (CC 3-Agent evaluation + 5 hardening items) · 事件桥设计完成
 - [ ] **Step 4:** EmpireThread event bridge — implementation (3 weeks, ~550 lines) · 事件桥实施
+- [x] **v0.2.5:** All 16 profiles online (launchd plists, Python 3.9→3.11) · 全 profile 上线
+- [x] **v0.2.6:** Audit closed-loop — low-score → Telegram alert + Kanban review card · 审计闭环
 
 ---
 

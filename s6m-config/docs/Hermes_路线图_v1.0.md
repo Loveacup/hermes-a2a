@@ -48,7 +48,13 @@
 
 **目标**：让 reviewer / tester / hanlinyuan 等 profile 真正上线运行，补齐 skills 使 Dispatcher 从"能跑"变"有用"。
 
-**当前问题**：Dispatcher 中文修复后，"审查代码安全"分数仍为 0——5 个在线 profile 无安全审计 skills。
+**状态**：A2A 服务已上线 ✅ | Skills 验证待做 ⏳
+
+**完成项**：
+- 2026-05-28：10 个离线 profile A2A 服务启动（plist Python 3.9→3.11 + launchctl bootstrap），16/16 全绿
+- plist 路径提交：`ec55826` fix(plists): system Python 3.9 → venv Python 3.11
+
+**当前问题**：部分 profile Agent Card skills 数偏低（reviewer:2, tester:4, auditor:3），需检查 toolset 配置是否正确暴露全部 skills。
 
 **工作量**：中（plist 配置 + skills 同步 + 模型配置）
 **风险**：低
@@ -59,8 +65,17 @@
 
 **目标**：`GET /a2a/tasks` 列表端点、SSE 真流式、fan-out 编排。
 
-**工作量**：大（改 server.py schema + 新端点 + 流式协议）
-**风险**：中（协议变更需向后兼容）
+**状态**：基本完成 ✅ | fan-out 编排待规划 ⏳
+
+**已实现**（server.py）：
+- `GET /a2a/tasks?limit=N&status=X` — 列表端点 (L147-156)
+- `GET /a2a/tasks/{id}/stream` — SSE 流式 (L158-161)
+- `GET /a2a/tasks/{id}` — 单任务查询 (L163-169)
+
+**待做**：fan-out 编排（应由 planner/dispatcher 负责，非 server.py 层）
+
+**工作量**：低（仅剩 fan-out 编排，其余已实现）
+**风险**：低
 
 ---
 
@@ -68,14 +83,31 @@
 
 **目标**：评分写回 task → 低分 → Telegram 告警 → Kanban 复审卡。
 
-**工作量**：中
-**风险**：中（告警噪音控制）
+**状态**：已完成 ✅
+
+**实现**（`08305ab`）：
+- `audit_hook.py` + `server.py`：score_task 后自动调用 `maybe_alert()`
+- 阈值 `ALERT_THRESHOLD=0.4`，冷却 5min，去重防骚扰
+- 低分 → `hermes send` Telegram 告警 + `kanban create` 复审卡
+- best-effort：告警失败不阻塞任务完成
+
+**工作量**：低（~45 行，已完成）
+**风险**：低（保守阈值 + 冷却 + 去重）
 
 ---
 
 ### 5️⃣ 治理流程补正
 
 **目标**：三省流程形同虚设、尚书省空壳问题修复（组织/流程层面）。
+
+**状态**：基本缓解 ✅ | 持续优化 ⏳
+
+**已改善**（2026-05-28 会话）：
+- 16/16 A2A 全在线，dispatch 链路可用
+- 尚书省 dispatcher + shangshu 双轨运行
+- plist 全部改用 venv Python 3.11
+
+**剩余**：kanban-gate 插件目录待恢复、cron coordinator 待重新部署
 
 **工作量**：低（制度和 skill 调整）
 **风险**：低
