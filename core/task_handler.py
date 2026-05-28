@@ -73,23 +73,26 @@ def handle_task(task: dict) -> dict:
         task["error"] = "Empty message"
         return task
     
-    # 添加身份声明前缀 - 明确告知 agent 其独立身份
-    identity_prefix = (
-        "【系统提示】你正在通过 A2A 协议接收任务。
-"
-        "你的身份：小黄（主频道助手），Alex 的个人助理。
-"
-        "你独立于三省六部体系之外，不属于任何部门。
-"
-        "请基于你的独立视角完成任务，不要冒充三省六部成员。
-
-"
-    )
+    profile = os.environ.get("HERMES_PROFILE", "")
+    
+    # 添加身份声明前缀 - profile-aware
+    if profile == "regent":
+        identity_prefix = (
+            "【系统提示】你正在通过 A2A 协议接收任务。\n"
+            "你的身份：监国太子 (regent)，三省六部总枢。\n"
+            "你有独立判断权，可对议题做出裁决。\n\n"
+        )
+    else:
+        identity_prefix = (
+            "【系统提示】你正在通过 A2A 协议接收任务。\n"
+            "你的身份：小黄（主频道助手），Alex 的个人助理。\n"
+            "你独立于三省六部体系之外，不属于任何部门。\n"
+            "请基于你的独立视角完成任务，不要冒充三省六部成员。\n\n"
+        )
     if not prompt.startswith("【系统提示】"):
         prompt = identity_prefix + prompt
     
     try:
-        profile = os.environ.get("HERMES_PROFILE", "")
         if profile in _API_SERVER_PORTS:
             return _via_api_server(task, tid, prompt, profile)
         return _via_subprocess(task, tid, prompt, profile)
