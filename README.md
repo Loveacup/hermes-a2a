@@ -187,6 +187,16 @@ Every profile exposes · 每个 profile 暴露：
 
 Port map · 端口表: `s6m-config/port-map.md`
 
+### New in v0.2.0 — Gateway + Observability
+
+The **Registry Gateway** (`:8928`) acts as a unified reverse proxy for all 16 profile A2A endpoints:
+- `GET /a2a/{profile}/.well-known/agent-card.json` → forwarded to profile
+- `POST /a2a/{profile}/tasks` / `/tasks/send` → forwarded to profile
+- `GET /health` → gateway liveness
+- `GET /gateway/metrics` → proxied requests, backend errors, uptime
+
+Per-profile metrics available at `GET /a2a/metrics` on every profile A2A server, with structured `key=value` logging for downstream aggregation.
+
 ---
 
 ## 💬 Discussion Mode · 讨论模式
@@ -227,6 +237,11 @@ hermes-a2a connects the following key roles in the 三省六部 governance syste
 - [x] ROLEPLAY + SYNTHESIZE discussion modes · 讨论模式
 - [x] Monorepo split: `core/` (vendor-ready) vs `s6m-config/` (deployment-specific) · Monorepo 拆分
 - [x] Doctor script: `hermes-a2a-doctor.sh` · 一键健康检查
+- [x] **v0.2.0:** Gateway reverse proxy (registry:8928) · 反向代理网关
+- [x] **v0.2.0:** Rate limiter (per-profile leaky bucket) · 速率限制
+- [x] **v0.2.0:** Capability-based dispatcher (CN/EN keyword scoring) · 能力分发
+- [x] **v0.2.0:** Observability — `/a2a/metrics`, `/gateway/metrics`, structured logging · 可观测性
+- [x] **v0.2.0:** Audit score hook — completion, speed, semantic, consistency scoring · 审计评分
 - [ ] **Step 3:** EmpireThread event bridge (MEMORY_QUERY → Hindsight) · 事件桥
 
 ---
