@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Optional
 
 from auto_discuss import classify_message, AutoDiscussDecision
+from auth import load_or_create_token
 
 
 # ── Config defaults (overridable via env / constructor) ─────────────
@@ -277,6 +278,15 @@ class A2ADiscussion:
         self.dry_run = dry_run
         self.a2a_timeout = a2a_timeout
         self.default_a2a_url = f"http://127.0.0.1:{default_port}/a2a/tasks"
+        # Resolve bearer token once.  load_or_create_token() honours
+        # A2A_AUTH_TOKEN env, then <hermes_home>/.a2a-token; both regent
+        # and default profiles share the same ~/.hermes/.a2a-token by default.
+        hermes_home = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
+        try:
+            self._auth_token = load_or_create_token(hermes_home)
+        except Exception as e:  # don't crash construction in degraded envs
+            logger.warning(f"A2A auth token load failed ({e}); requests will be unauthenticated")
+            self._auth_token = ""
 
     # ── Low-level helpers ───────────────────────────────────────────
     def _a2a_send(self, prompt: str, context_id: Optional[str] = None,
@@ -300,10 +310,13 @@ class A2ADiscussion:
         last_err: Optional[Exception] = None
         for attempt in range(retries + 1):
             try:
+                headers = {"Content-Type": "application/json"}
+                if self._auth_token:
+                    headers["Authorization"] = f"Bearer {self._auth_token}"
                 req = urllib.request.Request(
                     self.default_a2a_url,
                     data=body,
-                    headers={"Content-Type": "application/json"},
+                    headers=headers,
                     method="POST",
                 )
                 urllib.request.urlopen(req, timeout=10)
@@ -342,9 +355,15 @@ class A2ADiscussion:
         while time.time() - start < wait:
             time.sleep(A2A_POLL_INTERVAL)
             try:
-                resp = urllib.request.urlopen(
-                    f"{self.default_a2a_url}/{tid}", timeout=5
+                headers = {}
+                if self._auth_token:
+                    headers["Authorization"] = f"Bearer {self._auth_token}"
+                poll_req = urllib.request.Request(
+                    f"{self.default_a2a_url}/{tid}",
+                    headers=headers,
+                    method="GET",
                 )
+                resp = urllib.request.urlopen(poll_req, timeout=5)
                 d = json.loads(resp.read())
                 status = d.get("status", "")
                 if status in ("completed", "failed", "cancelled"):

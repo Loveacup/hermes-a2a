@@ -3,10 +3,18 @@
 Two execution modes (auto-selected):
 1. API Server mode: POST /v1/runs on profile's API Server (for regent:8643, default:8642)
 2. Subprocess mode: fallback for profiles without API Servers (hermes chat -q --profile <name>)
+
+Result-classification keyword bank is externalised (P1-13):
+    Priority: env A2A_CLASSIFY_KEYWORDS (path) > <hermes_home>/a2a-classify-keywords.json
+              > built-in defaults below.
+    JSON shape: {"tool_unavailable": [...], "task_achieved": [...]}
 """
 
 import json, logging, os, shutil, subprocess, time, urllib.request, urllib.error
 from datetime import datetime, timezone
+from pathlib import Path
+
+from identity import load_identity_prefix
 
 logger = logging.getLogger("hermes-a2a.task_handler")
 
@@ -18,7 +26,7 @@ _API_TIMEOUT = 300
 # Heuristic signals in the agent's final response text.
 # Scoped to send_message / delivery failures — NOT general "can't do X" analysis.
 # Ordered: tool_unavailable checked FIRST (degraded > succeeded).
-_RESULT_SIGNALS = {
+_DEFAULT_RESULT_SIGNALS: dict[str, list[str]] = {
     "tool_unavailable": [
         # English — send_message specific
         "unable to send", "cannot send", "can't send",
@@ -38,6 +46,72 @@ _RESULT_SIGNALS = {
     ],
 }
 
+_KEYWORDS_FILE_NAME = "a2a-classify-keywords.json"
+_KEYWORDS_ENV_VAR = "A2A_CLASSIFY_KEYWORDS"
+_RESULT_SIGNALS_CACHE: dict[str, list[str]] | None = None  # populated on first use
+
+
+def _load_signals() -> dict[str, list[str]]:
+    """Return the active keyword bank (cached after first call).
+
+    Priority:
+        1. env A2A_CLASSIFY_KEYWORDS → JSON file path
+        2. <HERMES_HOME>/a2a-classify-keywords.json
+        3. built-in _DEFAULT_RESULT_SIGNALS
+
+    Malformed JSON falls back to defaults with a warning.  Unknown buckets
+    are accepted (forward-compat for new categories); only ``tool_unavailable``
+    and ``task_achieved`` are read by ``_classify``.
+    """
+    global _RESULT_SIGNALS_CACHE
+    if _RESULT_SIGNALS_CACHE is not None:
+        return _RESULT_SIGNALS_CACHE
+
+    candidate: Path | None = None
+    env_path = os.environ.get(_KEYWORDS_ENV_VAR, "").strip()
+    if env_path:
+        p = Path(env_path).expanduser()
+        if p.is_file():
+            candidate = p
+    if candidate is None:
+        home = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
+        fallback = Path(home) / _KEYWORDS_FILE_NAME
+        if fallback.is_file():
+            candidate = fallback
+
+    if candidate is None:
+        _RESULT_SIGNALS_CACHE = {k: list(v) for k, v in _DEFAULT_RESULT_SIGNALS.items()}
+        return _RESULT_SIGNALS_CACHE
+
+    try:
+        data = json.loads(candidate.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("classify keywords file must be a JSON object")
+        loaded: dict[str, list[str]] = {}
+        for bucket, items in data.items():
+            if not isinstance(items, list):
+                continue
+            cleaned = [s for s in items if isinstance(s, str) and s.strip()]
+            if cleaned:
+                loaded[bucket] = cleaned
+        # Ensure both default buckets present (per-bucket fallback).
+        for k, default_vals in _DEFAULT_RESULT_SIGNALS.items():
+            if k not in loaded:
+                loaded[k] = list(default_vals)
+        _RESULT_SIGNALS_CACHE = loaded
+        logger.info(
+            "[hermes-a2a] classify keywords loaded from %s (%d buckets)",
+            candidate, len(loaded),
+        )
+    except (OSError, json.JSONDecodeError, ValueError) as e:
+        logger.warning(
+            "[hermes-a2a] classify keywords file %s unreadable (%s); using defaults",
+            candidate, e,
+        )
+        _RESULT_SIGNALS_CACHE = {k: list(v) for k, v in _DEFAULT_RESULT_SIGNALS.items()}
+
+    return _RESULT_SIGNALS_CACHE
+
 
 def _classify(status: str, response: str, error: str = "") -> dict:
     """Return semantic_status + completion_reason for the task result.
@@ -51,13 +125,14 @@ def _classify(status: str, response: str, error: str = "") -> dict:
         return {"semantic_status": "failed", "completion_reason": "agent_error"}
 
     r = response.lower()
+    signals = _load_signals()
 
     # degraded trumps succeeded — check first
-    for sig in _RESULT_SIGNALS["tool_unavailable"]:
+    for sig in signals.get("tool_unavailable", []):
         if sig in r:
             return {"semantic_status": "degraded", "completion_reason": "tool_unavailable"}
 
-    for sig in _RESULT_SIGNALS["task_achieved"]:
+    for sig in signals.get("task_achieved", []):
         if sig in r:
             return {"semantic_status": "succeeded", "completion_reason": "task_achieved"}
 
@@ -74,22 +149,12 @@ def handle_task(task: dict) -> dict:
         return task
     
     profile = os.environ.get("HERMES_PROFILE", "")
-    
-    # 添加身份声明前缀 - profile-aware
-    if profile == "regent":
-        identity_prefix = (
-            "【系统提示】你正在通过 A2A 协议接收任务。\n"
-            "你的身份：监国太子 (regent)，三省六部总枢。\n"
-            "你有独立判断权，可对议题做出裁决。\n\n"
-        )
-    else:
-        identity_prefix = (
-            "【系统提示】你正在通过 A2A 协议接收任务。\n"
-            "你的身份：小黄（主频道助手），Alex 的个人助理。\n"
-            "你独立于三省六部体系之外，不属于任何部门。\n"
-            "请基于你的独立视角完成任务，不要冒充三省六部成员。\n\n"
-        )
+    hermes_home = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
+
+    # Identity prefix is owned by the deploying business — loaded from
+    # env var / profile file / generic fallback.  See core/identity.py.
     if not prompt.startswith("【系统提示】"):
+        identity_prefix = load_identity_prefix(hermes_home, profile)
         prompt = identity_prefix + prompt
     
     try:

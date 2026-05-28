@@ -1,22 +1,107 @@
-"""hermes-a2a plugin — starts A2A HTTP server when registered by Hermes gateway."""
-import atexit, hashlib, logging, os, subprocess, sys
+"""hermes-a2a plugin — starts A2A HTTP server when registered by Hermes gateway.
+
+Port assignment uses sha256(profile) % PORT_RANGE + PORT_BASE for stability
+across gateway restarts.  Collisions are detected at boot:
+  - If `A2A_PORT` is explicitly set in env, it wins (escape hatch).
+  - Otherwise we try the stable port and, on collision (EADDRINUSE), scan
+    forward through PORT_RANGE for the next free slot, logging a warning.
+Logs from the spawned server.py go to ``~/.hermes/logs/a2a-<profile>.log``
+instead of /dev/null (P0-3).
+"""
+import atexit
+import hashlib
+import logging
+import os
+import socket
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 logger = logging.getLogger("hermes-a2a")
-PLUGIN_NAME, PLUGIN_VERSION = "hermes-a2a", "0.1.0"
+PLUGIN_NAME, PLUGIN_VERSION = "hermes-a2a", "0.2.0"
 PORT_BASE, PORT_RANGE = 8650, 300
 _server_proc = None
+_log_handle = None  # keeps file descriptor alive for the lifetime of the proc
 
 
 def _stable_port(profile: str) -> int:
-    # sha256 keeps `hash(profile) % 300 + 8650` shape but is deterministic across
-    # gateway restarts — Python's built-in hash() is PYTHONHASHSEED-randomized.
     return PORT_BASE + int(hashlib.sha256(profile.encode()).hexdigest(), 16) % PORT_RANGE
 
 
+def _port_free(host: str, port: int) -> bool:
+    """Best-effort probe — bind, then release.  Subject to a TOCTOU window
+    between probe-release and the child's bind.  The post-spawn health check
+    in _wait_for_server() catches losses of that race.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind((host, port))
+        except OSError:
+            return False
+    return True
+
+
+def _wait_for_server(host: str, port: int, proc: subprocess.Popen,
+                     profile: str, timeout: float = 2.0) -> None:
+    """Verify the spawned server.py actually bound ``port`` within ``timeout``.
+
+    Logs a clear warning (does not raise) if:
+        - the child exited during startup, or
+        - the port stays free past the deadline.
+
+    We deliberately swallow these into log warnings rather than raising:
+    Hermes plugin ``register()`` failures cascade into gateway-boot crashes,
+    which is a worse outcome than degraded discoverability.  Operators see
+    the log + an unreachable port and can investigate.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        rc = proc.poll()
+        if rc is not None:
+            logger.error(
+                "[hermes-a2a] server.py for profile=%s exited rc=%s during startup "
+                "(port %s:%d); see ~/.hermes/logs/a2a-%s.log",
+                profile, rc, host, port, profile,
+            )
+            return
+        if not _port_free(host, port):
+            return  # child is listening
+        time.sleep(0.05)
+    logger.warning(
+        "[hermes-a2a] server.py for profile=%s pid=%s alive but port %s:%d "
+        "still free after %.1fs — possible bind failure",
+        profile, proc.pid, host, port, timeout,
+    )
+
+
+def _resolve_port(profile: str, host: str) -> int:
+    """Resolve port: env override > stable hash > scan-forward on collision."""
+    env_port = os.environ.get("A2A_PORT", "").strip()
+    if env_port:
+        return int(env_port)
+
+    candidate = _stable_port(profile)
+    if _port_free(host, candidate):
+        return candidate
+
+    base = candidate
+    for offset in range(1, PORT_RANGE):
+        p = PORT_BASE + (base - PORT_BASE + offset) % PORT_RANGE
+        if _port_free(host, p):
+            logger.warning(
+                "[hermes-a2a] port %d busy for profile=%s, scanning → using %d",
+                candidate, profile, p,
+            )
+            return p
+    raise RuntimeError(
+        f"hermes-a2a: no free port in [{PORT_BASE}, {PORT_BASE+PORT_RANGE}) "
+        f"for profile={profile}"
+    )
+
+
 def _resolve_profile() -> str:
-    # `hermes -p X` sets HERMES_HOME=.../profiles/X/ but does NOT set
-    # HERMES_PROFILE inside the gateway process. Derive from HERMES_HOME.
     val = os.environ.get("HERMES_PROFILE", "").strip()
     if val:
         return val
@@ -26,16 +111,27 @@ def _resolve_profile() -> str:
     return "default"
 
 
+def _open_log(profile: str, hermes_home: str):
+    """Open ~/.hermes/logs/a2a-<profile>.log for append. Returns file object or DEVNULL."""
+    log_dir = Path(hermes_home) / "logs"
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        return open(log_dir / f"a2a-{profile}.log", "ab", buffering=0)
+    except OSError as e:
+        logger.warning("[hermes-a2a] cannot open log file (%s); falling back to DEVNULL", e)
+        return subprocess.DEVNULL
+
+
 def register(ctx) -> None:
     """Hermes plugin entry — spawn A2A HTTP server on profile-specific port."""
-    global _server_proc
+    global _server_proc, _log_handle
     if _server_proc and _server_proc.poll() is None:
         logger.warning("[hermes-a2a] already running pid=%s; skip spawn", _server_proc.pid)
         return
 
     profile = _resolve_profile()
-    port = _stable_port(profile)
     host = "127.0.0.1"
+    port = _resolve_port(profile, host)
     hermes_home = os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes")
 
     env = os.environ.copy()
@@ -43,25 +139,28 @@ def register(ctx) -> None:
         A2A_HOST=host,
         A2A_PORT=str(port),
         HERMES_HOME=hermes_home,
-        HERMES_PROFILE=profile,  # so server.py reports the right profile in /health
+        HERMES_PROFILE=profile,
     )
 
     server_py = Path(__file__).parent / "server.py"
+    _log_handle = _open_log(profile, hermes_home)
     _server_proc = subprocess.Popen(
         [sys.executable, str(server_py)],
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=_log_handle,
+        stderr=subprocess.STDOUT,
     )
     logger.info(
-        "[hermes-a2a] v%s listening http://%s:%d (profile=%s, pid=%s)",
+        "[hermes-a2a] v%s starting http://%s:%d (profile=%s, pid=%s)",
         PLUGIN_VERSION, host, port, profile, _server_proc.pid,
     )
+    # Close the TOCTOU window: confirm the child actually bound the port.
+    _wait_for_server(host, port, _server_proc, profile)
     atexit.register(_cleanup)
 
 
 def _cleanup() -> None:
-    global _server_proc
+    global _server_proc, _log_handle
     if _server_proc and _server_proc.poll() is None:
         logger.info("[hermes-a2a] terminating server pid=%s", _server_proc.pid)
         _server_proc.terminate()
@@ -69,3 +168,8 @@ def _cleanup() -> None:
             _server_proc.wait(timeout=3)
         except subprocess.TimeoutExpired:
             _server_proc.kill()
+    if _log_handle and _log_handle is not subprocess.DEVNULL:
+        try:
+            _log_handle.close()
+        except OSError:
+            pass
