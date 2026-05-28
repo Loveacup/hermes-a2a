@@ -10,12 +10,18 @@ handler thread enqueues a worker thread per task.
 import json
 import logging
 import os
+import signal
+import sys
 import threading
 import time
 import uuid
 from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
+
+# Ensure sibling modules resolve when launched as a flat script (the launchd
+# plists invoke `python server.py` directly — no package context).
+sys.path.insert(0, str(Path(__file__).parent))
 
 from agent_card import generate_agent_card
 from task_handler import handle_task
@@ -28,6 +34,7 @@ from auth import (
 )
 from rate_limiter import DEFAULT_LIMITER
 from audit_hook import score_task, maybe_alert
+import registry as _registry
 
 logger = logging.getLogger("hermes-a2a.server")
 
@@ -316,18 +323,72 @@ def _execute_task(tid: str) -> None:
         )
 
 
+SERVER_VERSION = "0.2.0"
+
+
+def _install_shutdown_handlers(server: ThreadingHTTPServer) -> None:
+    """Translate SIGTERM/SIGINT into a clean server.shutdown() call.
+
+    Without this, launchd's SIGTERM short-circuits serve_forever() and the
+    ``finally`` block in main() never runs, leaving a stale registry entry
+    behind. We schedule shutdown on a background thread because
+    server.shutdown() blocks until serve_forever returns.
+    """
+
+    def _handler(signum, _frame):
+        logger.info("event=signal received=%s initiating shutdown", signum)
+        threading.Thread(target=server.shutdown, daemon=True).start()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, _handler)
+        except (ValueError, OSError):
+            pass  # not on main thread or unsupported on platform
+
+
 def main() -> None:
+    profile = os.environ.get("HERMES_PROFILE", "default")
+
+    # BUG-006: reap any prior server.py for this profile (launchd-managed or
+    # plugin-spawned) before we try to bind PORT. plugin.py also calls this,
+    # but launchd starts server.py directly without going through plugin.py,
+    # so server.py must reap on its own boot path too.
+    try:
+        n = _registry.kill_stale(profile, skip_pid=os.getpid())
+        if n:
+            logger.warning("event=killed_stale profile=%s count=%d", profile, n)
+            time.sleep(0.3)
+    except Exception:
+        logger.exception("kill_stale failed (continuing)")
+
     server = ThreadingHTTPServer((HOST, PORT), A2AHandler)
     server.daemon_threads = True
+    _install_shutdown_handlers(server)
+
+    # BUG-008: publish (profile, host, port, pid) to the shared runtime
+    # registry so discovery clients can locate us without `ps aux | grep`.
+    try:
+        _registry.upsert(profile, host=HOST, port=PORT, pid=os.getpid(),
+                         version=SERVER_VERSION)
+    except Exception:
+        logger.exception("registry upsert failed (continuing anyway)")
+
     logger.info(
-        "event=server_start host=%s port=%d profile=%s db=%s",
-        HOST, PORT, os.environ.get("HERMES_PROFILE", "default"), _DB_PATH,
+        "event=server_start host=%s port=%d profile=%s pid=%d db=%s",
+        HOST, PORT, profile, os.getpid(), _DB_PATH,
     )
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        # Deregister BEFORE closing the socket so a fast restart never sees
+        # our stale entry. expected_pid guards the "old-server-atexit-fires-
+        # after-new-server-registered" race.
+        try:
+            _registry.remove(profile, expected_pid=os.getpid())
+        except Exception:
+            logger.exception("registry remove failed")
         server.server_close()
         _store.close()
 

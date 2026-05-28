@@ -7,6 +7,10 @@ across gateway restarts.  Collisions are detected at boot:
     forward through PORT_RANGE for the next free slot, logging a warning.
 Logs from the spawned server.py go to ``~/.hermes/logs/a2a-<profile>.log``
 instead of /dev/null (P0-3).
+
+BUG-006 (zombie cleanup): before spawning we consult the shared runtime
+registry (~/.hermes/a2a-registry.json) and kill any prior server.py owned
+by the same profile, preventing accumulation across gateway restarts.
 """
 import atexit
 import hashlib
@@ -17,6 +21,14 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+try:
+    # Package-style import (e.g. hermes_a2a.plugin).
+    from . import registry as _registry  # type: ignore
+except (ImportError, ValueError):
+    # Flat-deploy fallback: plugin.py loaded with its own dir on sys.path.
+    sys.path.insert(0, str(Path(__file__).parent))
+    import registry as _registry  # type: ignore
 
 logger = logging.getLogger("hermes-a2a")
 PLUGIN_NAME, PLUGIN_VERSION = "hermes-a2a", "0.2.0"
@@ -131,6 +143,20 @@ def register(ctx) -> None:
 
     profile = _resolve_profile()
     host = "127.0.0.1"
+
+    # BUG-006: kill any prior server.py owned by this profile before we try
+    # to grab a port. Without this, gateway restarts leak server.py processes
+    # (observed: 17 accumulated zombies). Failure here is non-fatal — we
+    # still attempt port allocation (which will scan-forward on collision).
+    try:
+        n = _registry.kill_stale(profile)
+        if n:
+            logger.info("[hermes-a2a] reaped %d stale server.py for profile=%s", n, profile)
+            # Give the kernel a beat to release the port the dead server held.
+            time.sleep(0.3)
+    except Exception:
+        logger.exception("[hermes-a2a] registry.kill_stale failed for profile=%s", profile)
+
     port = _resolve_port(profile, host)
     hermes_home = os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes")
 

@@ -6,12 +6,20 @@ HTTP/JSON-RPC server.
 
 Design:
     - stdlib only (no third-party deps)
-    - Token resolution priority: env var A2A_AUTH_TOKEN > file ~/.hermes/.a2a-token > auto-generate
+    - Token resolution priority: env var A2A_AUTH_TOKEN > shared file
+      ~/.hermes/.a2a-token > auto-generate
     - Auto-generated token file is created with mode 0600
     - CORS allowlist via env var A2A_CORS_ORIGINS (comma-separated)
     - Public endpoints (no auth): /health, /a2a/.well-known/agent-card.json
     - Protected endpoints: anything under /a2a/tasks
     - Bearer token comparison uses hmac.compare_digest (constant-time)
+
+BUG-007 (token discovery): the token file lives at ``~/.hermes/.a2a-token``,
+shared across every profile. The ``hermes_home`` argument to
+``load_or_create_token`` is kept for callsite compatibility but no longer
+controls where the token is read from — see ``_resolve_token_path`` for
+the actual lookup chain (env override ``A2A_TOKEN_FILE`` > shared root
+from paths.hermes_root()).
 
 Public API:
     load_or_create_token(hermes_home) -> str
@@ -30,6 +38,11 @@ import stat
 from pathlib import Path
 from typing import Mapping
 
+try:
+    from . import paths as _paths  # package context
+except (ImportError, ValueError):
+    import paths as _paths  # flat-deploy fallback (server.py injects sys.path)
+
 logger = logging.getLogger("hermes-a2a.auth")
 
 # ---------------------------------------------------------------------------
@@ -38,6 +51,7 @@ logger = logging.getLogger("hermes-a2a.auth")
 
 _TOKEN_FILE_NAME: str = ".a2a-token"
 _TOKEN_ENV_VAR: str = "A2A_AUTH_TOKEN"
+_TOKEN_PATH_ENV_VAR: str = "A2A_TOKEN_FILE"  # override token file location for tests
 _CORS_ENV_VAR: str = "A2A_CORS_ORIGINS"
 _DEFAULT_CORS_ORIGINS: str = "http://127.0.0.1,http://localhost"
 _TOKEN_BYTES: int = 32  # secrets.token_urlsafe(32) -> ~43 char URL-safe token
@@ -62,19 +76,30 @@ _active_token: str | None = None
 # ---------------------------------------------------------------------------
 
 
-def load_or_create_token(hermes_home: str) -> str:
+def _resolve_token_path(hermes_home: str | None = None) -> Path:
+    """Locate the shared token file. ``hermes_home`` is ignored (legacy arg).
+
+    Priority:
+        1. ``A2A_TOKEN_FILE`` env var (absolute path) — test/escape hatch
+        2. ``<shared hermes root>/.a2a-token`` — the canonical location
+    """
+    override = os.environ.get(_TOKEN_PATH_ENV_VAR, "").strip()
+    if override:
+        return Path(override).expanduser()
+    return _paths.hermes_root() / _TOKEN_FILE_NAME
+
+
+def load_or_create_token(hermes_home: str | None = None) -> str:
     """Resolve the active auth token.
 
     Priority:
         1. Environment variable ``A2A_AUTH_TOKEN`` (if non-empty)
-        2. File ``<hermes_home>/.a2a-token`` (if exists and non-empty)
+        2. Shared file at ``~/.hermes/.a2a-token`` (if exists and non-empty)
         3. Auto-generate a new 32-byte URL-safe token, persist with mode 0600
 
     The resolved token is cached at module level for subsequent ``check_auth``
-    calls.
-
-    Args:
-        hermes_home: Directory holding Hermes runtime state (e.g. ``~/.hermes``).
+    calls. ``hermes_home`` is accepted for backwards compatibility but
+    intentionally ignored — see BUG-007 in the module docstring.
 
     Returns:
         The active token string.
@@ -88,9 +113,8 @@ def load_or_create_token(hermes_home: str) -> str:
         logger.info("auth: token loaded from env var %s", _TOKEN_ENV_VAR)
         return _active_token
 
-    # 2. Token file
-    home_path = Path(hermes_home).expanduser()
-    token_path = home_path / _TOKEN_FILE_NAME
+    # 2. Shared token file (independent of per-profile HERMES_HOME)
+    token_path = _resolve_token_path(hermes_home)
 
     if token_path.exists():
         try:
@@ -106,7 +130,7 @@ def load_or_create_token(hermes_home: str) -> str:
     # 3. Generate and persist
     new_token = secrets.token_urlsafe(_TOKEN_BYTES)
     try:
-        home_path.mkdir(parents=True, exist_ok=True)
+        token_path.parent.mkdir(parents=True, exist_ok=True)
         # Open with restrictive mode from the start to avoid a window where
         # the file is world-readable.
         fd = os.open(
@@ -123,7 +147,7 @@ def load_or_create_token(hermes_home: str) -> str:
             os.chmod(token_path, stat.S_IRUSR | stat.S_IWUSR)
         except OSError:
             pass
-        logger.info("auth: generated new token at %s (mode 0600)", token_path)
+        logger.info("auth: generated new shared token at %s (mode 0600)", token_path)
     except OSError as e:
         logger.error("auth: failed to persist token to %s: %s", token_path, e)
         # Still return the generated token so the server can run; it just

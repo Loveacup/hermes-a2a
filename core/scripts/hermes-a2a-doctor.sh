@@ -154,21 +154,245 @@ for pair in "${API_PAIRS[@]}"; do
     fi
 done
 
+# ─────────────────────────────────────────────────────────────────────
+# Configuration & Drift Checks (§5.3) — additive, no impact on endpoint
+# probes above. Each function prints one OK/FAIL line and returns 0 on
+# pass, non-zero on fail. ALL_OK is flipped to false on any failure.
+# ─────────────────────────────────────────────────────────────────────
+
+CHECK_PASS=0
+CHECK_FAIL=0
+declare -a CHECK_JSON
+
+_record() {
+    # _record <name> <pass|fail> <message>
+    local name=$1 verdict=$2 msg=$3
+    if [[ "$verdict" == "pass" ]]; then
+        CHECK_PASS=$((CHECK_PASS + 1))
+        $JSON_MODE || echo "  ✅ $name: $msg"
+    else
+        CHECK_FAIL=$((CHECK_FAIL + 1))
+        ALL_OK=false
+        $JSON_MODE || echo "  ❌ $name: $msg"
+    fi
+    if $JSON_MODE; then
+        local escaped
+        escaped=$(printf '%s' "$msg" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        CHECK_JSON+=("    {\"name\":\"$name\",\"verdict\":\"$verdict\",\"message\":\"$escaped\"}")
+    fi
+}
+
+# 1. All hermes-a2a/server.py processes must run the venv Python (3.11),
+#    not /opt/homebrew/python3 (3.14) or the system one (3.9).
+check_python_interpreter() {
+    local expected="/Users/alexcai/.hermes/hermes-agent/venv/bin/python"
+    local procs
+    procs=$(ps -eo command | grep -E "hermes-a2a.*server\.py" | grep -v grep || true)
+    if [[ -z "$procs" ]]; then
+        _record "python_interpreter" "fail" "no server.py procs visible"
+        return 1
+    fi
+    local bad
+    bad=$(echo "$procs" | awk '{print $1}' | sort -u | grep -v "^${expected}" || true)
+    if [[ -n "$bad" ]]; then
+        _record "python_interpreter" "fail" "non-venv interpreter(s): $(echo "$bad" | tr '\n' ' ')"
+        return 1
+    fi
+    local count
+    count=$(echo "$procs" | wc -l | tr -d ' ')
+    _record "python_interpreter" "pass" "$count proc(s) on venv 3.11"
+}
+
+# 2. fallback_providers in default + per-profile configs must NOT contain
+#    minimax-cn / MiniMax-M2.7 self-loops.
+check_fallback_chain_self_loop() {
+    local bad=""
+    for cfg in /Users/alexcai/.hermes/config.yaml /Users/alexcai/.hermes/profiles/*/config.yaml; do
+        [[ -f "$cfg" ]] || continue
+        # Look for MiniMax-M2.7 specifically inside a fallback_providers list
+        local hit
+        hit=$(/Users/alexcai/.hermes/hermes-agent/venv/bin/python -c "
+import yaml, sys
+try:
+    d = yaml.safe_load(open('$cfg')) or {}
+    fp = d.get('fallback_providers') or []
+    if isinstance(fp, list):
+        for entry in fp:
+            if isinstance(entry, dict) and 'MiniMax-M2.7' in str(entry.get('model','')):
+                print('hit'); break
+except Exception:
+    pass
+" 2>/dev/null)
+        if [[ "$hit" == "hit" ]]; then
+            bad="$bad $cfg"
+        fi
+    done
+    if [[ -n "$bad" ]]; then
+        _record "fallback_chain_self_loop" "fail" "MiniMax-M2.7 in fallback for:$bad"
+        return 1
+    fi
+    _record "fallback_chain_self_loop" "pass" "no self-loops in any fallback_providers"
+}
+
+# 3. Every listening port in the A2A range (8650-8950) has exactly one PID
+#    bound to it. Multiple binds = duplicate server.py.
+check_port_uniqueness() {
+    local dup
+    dup=$(lsof -iTCP -sTCP:LISTEN -nP 2>/dev/null \
+        | awk '/127\.0\.0\.1:8[6-9][0-9][0-9]/{split($9,a,":"); print a[2]}' \
+        | sort | uniq -c | awk '$1>1{print $2"("$1")"}' | tr '\n' ' ')
+    if [[ -n "$dup" ]]; then
+        _record "port_uniqueness" "fail" "duplicate listeners: $dup"
+        return 1
+    fi
+    _record "port_uniqueness" "pass" "every A2A port has ≤1 listener"
+}
+
+# 4. plist files must NOT bake in HOME=/Users/.../.hermes/profiles/<p>/home.
+#    Scanning the plists directly is faster and more deterministic than
+#    `launchctl print` (which can stall for several seconds per label).
+check_home_hack_leak() {
+    local bad=""
+    for plist in /Users/alexcai/Library/LaunchAgents/com.hermes.a2a.*.plist; do
+        [[ -f "$plist" ]] || continue
+        # Match an EnvironmentVariables HOME entry pointing inside a profile sandbox.
+        if /usr/bin/plutil -extract EnvironmentVariables.HOME raw "$plist" 2>/dev/null \
+                | grep -qE "/profiles/[^/]+/home"; then
+            bad="$bad $(basename "$plist" .plist)"
+        fi
+    done
+    if [[ -n "$bad" ]]; then
+        _record "home_hack_leak" "fail" "HOME hijacked in:$bad"
+        return 1
+    fi
+    _record "home_hack_leak" "pass" "no plist bakes in a hijacked HOME"
+}
+
+# 5. core/ and deploy/ must be byte-identical (modulo __pycache__).
+check_core_deploy_drift() {
+    # diff returns 1 when differences exist — must guard against pipefail.
+    local diff_out
+    diff_out=$( { diff -rq /Users/alexcai/code/hermes-a2a/core/ \
+                            /Users/alexcai/.hermes/plugins/hermes-a2a/ 2>/dev/null \
+                  || true; } | grep -v __pycache__ | head -5 || true)
+    if [[ -n "$diff_out" ]]; then
+        local summary
+        summary=$(echo "$diff_out" | wc -l | tr -d ' ')
+        _record "core_deploy_drift" "fail" "$summary diff(s); first: $(echo "$diff_out" | head -1)"
+        return 1
+    fi
+    _record "core_deploy_drift" "pass" "core/ ≡ deploy/"
+}
+
+# 6. Lightweight key-presence check (full liveness ping is too invasive for
+#    a doctor run). For each unique key_env across configs, verify env var
+#    is set in the main .env file used by gateway boot.
+check_provider_key_presence() {
+    local env_file=/Users/alexcai/.hermes/.env
+    if [[ ! -f "$env_file" ]]; then
+        _record "provider_key_presence" "fail" "missing $env_file"
+        return 1
+    fi
+    local required
+    required=$(grep -hE "^\s*key_env:" /Users/alexcai/.hermes/config.yaml \
+                              /Users/alexcai/.hermes/profiles/*/config.yaml 2>/dev/null \
+        | awk -F': ' '{gsub(/[[:space:]]/,"",$2); print $2}' \
+        | sort -u | grep -v "^$")
+    local missing=""
+    for var in $required; do
+        if ! grep -qE "^\s*$var\s*=" "$env_file" 2>/dev/null; then
+            missing="$missing $var"
+        fi
+    done
+    if [[ -n "$missing" ]]; then
+        _record "provider_key_presence" "fail" "missing in .env:$missing"
+        return 1
+    fi
+    _record "provider_key_presence" "pass" "all referenced key_env present in .env"
+}
+
+# 7. A2A task_handler.py must NOT carry Telegram bot credentials — A2A is a
+#    pure intra-host RPC plane; TG creds belong to the gateway.
+check_send_message_tool_in_a2a() {
+    local hits
+    hits=$(grep -lE "TELEGRAM_BOT_TOKEN|telegram_chat_id|send_message.*telegram" \
+        /Users/alexcai/.hermes/plugins/hermes-a2a/*.py 2>/dev/null || true)
+    if [[ -n "$hits" ]]; then
+        _record "send_message_tool_in_a2a" "fail" "TG creds referenced in: $(echo $hits | tr '\n' ' ')"
+        return 1
+    fi
+    _record "send_message_tool_in_a2a" "pass" "no TG creds in A2A plane"
+}
+
+# 8. The identity prefix must vary by profile. Two things must hold:
+#      a) identity.py accepts and uses a `profile` parameter (no baked-in
+#         identity per profile)
+#      b) task_handler.py passes os.environ.get("HERMES_PROFILE", ...)
+#         into the loader
+check_identity_prefix_profile_aware() {
+    local id_file=/Users/alexcai/.hermes/plugins/hermes-a2a/identity.py
+    local th_file=/Users/alexcai/.hermes/plugins/hermes-a2a/task_handler.py
+    if [[ ! -f "$id_file" || ! -f "$th_file" ]]; then
+        _record "identity_prefix_profile_aware" "fail" "identity.py or task_handler.py missing"
+        return 1
+    fi
+    if ! grep -qE "def load_identity_prefix.*profile" "$id_file"; then
+        _record "identity_prefix_profile_aware" "fail" "identity.py signature lacks profile param"
+        return 1
+    fi
+    if ! grep -qE "load_identity_prefix\(.*profile\)" "$th_file"; then
+        _record "identity_prefix_profile_aware" "fail" "task_handler.py doesn't pass profile through"
+        return 1
+    fi
+    if ! grep -qE "HERMES_PROFILE" "$th_file"; then
+        _record "identity_prefix_profile_aware" "fail" "task_handler.py never reads HERMES_PROFILE"
+        return 1
+    fi
+    _record "identity_prefix_profile_aware" "pass" "identity flows HERMES_PROFILE → task_handler → identity.py"
+}
+
 if $JSON_MODE; then
     echo ""
     echo "  ],"
+    echo "  \"checks\": ["
+else
+    echo ""
+    echo "--- Configuration & Drift Checks ---"
+fi
+
+check_python_interpreter
+check_fallback_chain_self_loop
+check_port_uniqueness
+check_home_hack_leak
+check_core_deploy_drift
+check_provider_key_presence
+check_send_message_tool_in_a2a
+check_identity_prefix_profile_aware
+
+if $JSON_MODE; then
+    # Join CHECK_JSON entries with commas (no `local` outside a function).
+    for i in "${!CHECK_JSON[@]}"; do
+        if [[ $i -lt $((${#CHECK_JSON[@]} - 1)) ]]; then
+            echo "${CHECK_JSON[$i]},"
+        else
+            echo "${CHECK_JSON[$i]}"
+        fi
+    done
+    echo "  ],"
     echo "  \"a2a_summary\": \"$ok_a2a/$total_a2a\","
     echo "  \"api_summary\": \"$ok_api/$total_api\","
+    echo "  \"checks_summary\": \"$CHECK_PASS pass / $CHECK_FAIL fail\","
     echo "  \"all_ok\": $ALL_OK"
     echo "}"
 else
     echo ""
-    echo "A2A: $ok_a2a/$total_a2a healthy"
-    echo "API: $ok_api/$total_api healthy"
+    echo "A2A:    $ok_a2a/$total_a2a healthy"
+    echo "API:    $ok_api/$total_api healthy"
+    echo "Checks: $CHECK_PASS pass / $CHECK_FAIL fail"
     if $ALL_OK; then
         echo "✅ ALL HEALTHY"
     else
-        echo "❌ SOME DEAD — investigate!"
+        echo "❌ ISSUES FOUND — investigate above"
     fi
 fi
 
