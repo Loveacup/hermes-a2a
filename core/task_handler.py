@@ -10,7 +10,7 @@ Result-classification keyword bank is externalised (P1-13):
     JSON shape: {"tool_unavailable": [...], "task_achieved": [...]}
 """
 
-import json, logging, os, shutil, subprocess, time, urllib.request, urllib.error
+import json, logging, os, shutil, sqlite3, subprocess, time, urllib.request, urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,7 +22,16 @@ except ImportError:  # resolver may be absent in pre-P0-2 deployments
     resolve_skills = None
     _skills_to_env = None
 
+try:
+    from comment_kind_backfill import backfill as _comment_kind_backfill
+except ImportError:  # bridge may be absent in pre-P1-A deployments
+    _comment_kind_backfill = None
+
 logger = logging.getLogger("hermes-a2a.task_handler")
+
+# Bounded per-tick sweep for DCI bypass-table backfill (P1-A).
+# Keeps the post-task hook predictable on a busy kanban.
+_BACKFILL_SWEEP_LIMIT = 100
 
 # Profile → API Server port (only profiles with running API Servers)
 _API_SERVER_PORTS = {"regent": 8643, "default": 8642}
@@ -173,6 +182,72 @@ def _resolve_skill_env(profile: str, task: dict) -> tuple[dict[str, str], list]:
     return _skills_to_env(resolved), resolved
 
 
+def _ensure_comment_kind_backfill(task_id: str | None = None) -> dict | None:
+    """Classify+record unclassified comments into the DCI bypass table.
+
+    Wired into ``handle_task`` so each A2A tick advances the bypass table —
+    agents write free-text via ``kanban_comment`` (touches task_comments
+    only) and the orchestrator needs ``a2a_comment_kinds`` populated to
+    route on DCI kinds.
+
+    - Task scope first (so the just-completed task is classified immediately).
+    - Then a bounded global sweep (limit=100) for catch-up.
+    - Idempotent: ``backfill`` LEFT JOINs out rows that already have a kind.
+    - Best-effort: any sqlite/import error → silent no-op.
+    """
+    if _comment_kind_backfill is None:
+        return None
+    home = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
+    db_path = Path(home) / "kanban.db"
+    if not db_path.is_file():
+        return None
+    try:
+        conn = sqlite3.connect(str(db_path))
+    except sqlite3.Error as e:
+        logger.warning("[hermes-a2a] backfill: cannot open %s: %s", db_path, e)
+        return None
+    classified = 0
+    defaulted = 0
+    skipped = 0
+    by_kind: dict[str, int] = {}
+    try:
+        if task_id:
+            try:
+                r = _comment_kind_backfill(conn, task_id=task_id)
+                classified += r.classified
+                defaulted += r.defaulted
+                skipped += r.skipped
+                for k, n in r.by_kind.items():
+                    by_kind[k] = by_kind.get(k, 0) + n
+            except sqlite3.OperationalError as e:
+                # Bypass table missing — migration not applied here.
+                logger.debug("[hermes-a2a] backfill task=%s skipped: %s", task_id, e)
+                return None
+            except sqlite3.Error as e:
+                logger.warning("[hermes-a2a] backfill task=%s: %s", task_id, e)
+        try:
+            r = _comment_kind_backfill(conn, limit=_BACKFILL_SWEEP_LIMIT)
+            classified += r.classified
+            defaulted += r.defaulted
+            skipped += r.skipped
+            for k, n in r.by_kind.items():
+                by_kind[k] = by_kind.get(k, 0) + n
+        except sqlite3.OperationalError as e:
+            logger.debug("[hermes-a2a] backfill sweep skipped: %s", e)
+            return None
+        except sqlite3.Error as e:
+            logger.warning("[hermes-a2a] backfill sweep: %s", e)
+            return None
+        return {
+            "classified": classified,
+            "defaulted": defaulted,
+            "skipped": skipped,
+            "by_kind": by_kind,
+        }
+    finally:
+        conn.close()
+
+
 def handle_task(task: dict) -> dict:
     tid = task.get("id", "unknown")
     msg = task.get("message") or task.get("input") or task.get("action") or {}
@@ -190,15 +265,20 @@ def handle_task(task: dict) -> dict:
     if not prompt.startswith("【系统提示】"):
         identity_prefix = load_identity_prefix(hermes_home, profile)
         prompt = identity_prefix + prompt
-    
+
     try:
         if profile in _API_SERVER_PORTS:
-            return _via_api_server(task, tid, prompt, profile)
-        return _via_subprocess(task, tid, prompt, profile)
+            result = _via_api_server(task, tid, prompt, profile)
+        else:
+            result = _via_subprocess(task, tid, prompt, profile)
     except Exception as e:
         task["status"] = "failed"
         task["error"] = str(e)
-        return task
+        result = task
+
+    # P1-A: post-tick DCI bypass-table backfill. Bounded + best-effort.
+    _ensure_comment_kind_backfill(task_id=tid if tid != "unknown" else None)
+    return result
 
 
 def _via_api_server(task: dict, tid: str, prompt: str, profile: str) -> dict:

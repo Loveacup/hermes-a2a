@@ -32,12 +32,68 @@ _PREFIX_RE = re.compile(
 )
 
 # Map phrase fragments → kind. Order matters: more specific first.
-# Keep this list conservative — false positives are worse than misses.
+# Conservative core patterns + P1-C production-shape extensions calibrated
+# against 224 historical task_comments (target ≥70% coverage).
+#
+# Ordering rationale (highest signal first — once a pattern matches, the
+# remainder are not checked):
+#   1. META_DIRECTIVE — 太子/监国 markers are unambiguous
+#   2. EVIDENCE_FOR (audit reports) — compound noun phrases (稽核报告, 测试报告)
+#      win over single-keyword dissent words inside their content.
+#   3. SUMMARIZE (handoff / completion) — work recap framings beat keywords
+#      embedded in summary bodies.
+#   4. REFINE (修订完成 / 修复报告) — revision verbs beat 封驳/纠正 used as
+#      references to the prior dispute being addressed.
+#   5. CHALLENGE / CONCEDE / EVIDENCE_AGAINST / EVIDENCE_FOR (citation) /
+#      SYNTHESIZE / SUMMARIZE (generic) — broader phrases.
+#   6. ASK / CLARIFY
+#   7. VOTE buckets
+#   8. PROPOSE — opening claims (catch-all for declarative sentences).
 _PATTERNS: list[tuple[re.Pattern[str], CommentKind]] = [
-    # CHALLENGE — Chinese 质疑/挑战/反对/不同意 + English challenge/disagree
+    # ── 1. META_DIRECTIVE: regent (太子) operational directives ────────
+    # 【父皇XX】/【监国XX】 / 【修正】markers are exclusive to regent ops.
+    (re.compile(r"【\s*(父皇|监国|太子|圣谕|敕令|修正)[^】]*】", re.I),
+     CommentKind.META_DIRECTIVE),
+    (re.compile(r"(批示|纠偏|敕令|圣谕|监国处置|监国诊断)", re.I),
+     CommentKind.META_DIRECTIVE),
+
+    # ── 2. EVIDENCE_FOR (high-confidence compound patterns) ────────────
+    # Audit / review outputs cite findings + concrete artifacts; map to
+    # EVIDENCE_FOR ahead of CHALLENGE so 阻断/FAIL inside an audit body
+    # does not mis-route the entire report.
+    (re.compile(r"(稽核详[情记细]|稽核报告|稽核(执行)?详细记录"
+                r"|审计详[情记细]|审计报告|审计发现|审计记录"
+                r"|复稽报告?|复稽详[情记]|复审详[情记]|复审结果|复审报告"
+                r"|审查结果|审查详[情记]|校验证据|稽核记录)", re.I),
+     CommentKind.EVIDENCE_FOR),
+    (re.compile(r"(测试报告|验证报告|E2E.*报告|总体[评结]定|测试结果|验证结果"
+                r"|\d+\s*/\s*\d+\s*PASS|总体结果|检验结果)", re.I),
+     CommentKind.EVIDENCE_FOR),
+
+    # ── 3. SUMMARIZE (high-confidence handoff / delivery / completion) ─
+    (re.compile(r"(review[- ]required\s+handoff|交付物清单|执行总结|执行摘要"
+                r"|交付清单|交付摘要|归档(执行)?摘要|工部交付"
+                r"|交付桥|delivery\s+bridge)", re.I),
+     CommentKind.SUMMARIZE),
+    (re.compile(r"(处理完成|注入完成|演习完成|归档完成|调研完成|执行完成"
+                r"|批次.*处理|inbox.*处理|检索完成)", re.I),
+     CommentKind.SUMMARIZE),
+    (re.compile(r"\b(handoff|changed\s+files?|delivery\s+bridge)\b", re.I),
+     CommentKind.SUMMARIZE),
+
+    # ── 4. REFINE (high-confidence revision / fix reports) ─────────────
+    (re.compile(r"(修订完成|修订报告|修复报告|修复摘要|修复完成"
+                r"|大匠修复|逐一回应)", re.I),
+     CommentKind.REFINE),
+
+    # ── 5. CHALLENGE: block / halt / dissent (after audit reports) ─────
+    (re.compile(r"^\s*BLOCKED\b", re.I),
+     CommentKind.CHALLENGE),
+    (re.compile(r"(阻断|拒绝合入|否决|不予通过|不批|驳回|封驳)", re.I),
+     CommentKind.CHALLENGE),
     (re.compile(r"(质疑|挑战|反对|不同意|存疑|我不认为|这忽略了)", re.I),
      CommentKind.CHALLENGE),
-    (re.compile(r"\b(challenge|disagree|i\s+disagree|i\s+question)\b", re.I),
+    (re.compile(r"\b(challenge|disagree|i\s+disagree|i\s+question|blocked\b)\b", re.I),
      CommentKind.CHALLENGE),
 
     # CONCEDE — 同意/认可/我接受/确实 + concede/agree/accept
