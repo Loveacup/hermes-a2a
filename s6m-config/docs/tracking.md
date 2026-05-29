@@ -48,7 +48,7 @@ repo: https://github.com/finalhour/hermes-a2a
 
 ### Step 2: 全量部署（10+ profile，端口公式化）
 
-### Step 3: EmpireThread 事件桥（MEMORY_QUERY → Hindsight 跨部门只读）
+### Step 3: EmpireThread 事件桥（MEMORY_QUERY → Supermemory 跨部门只读，ADR-005 单层架构）
 
 ## 端点
 
@@ -106,3 +106,4 @@ hermes-a2a/（源码 ~/code/hermes-a2a/）
 - 2026-05-28: 结果语义升级 — task_handler 增加 `semantic_status`（succeeded/degraded/failed）+ `completion_reason` + `fallback_text`。修复 A2A 任务 blind-complete + 无回退问题。
 - 2026-05-28: 信号覆盖补丁 — 中文口语化表达（已发到/已发至/已发出）纳入分类器。commit `2a19515`。
 - 2026-05-28: 讨论模式 — core/discuss.py 支持两种模式：ROLEPLAY（多轮角色扮演，双方各自发 TG 内阁群）和 SYNTHESIZE（default 深度分析 → regent 综合研判）。s6m-config/discuss-modes.yaml 配置。
+- 2026-05-30: EventBridge sink Hindsight → Supermemory 替换（ADR-005, 决策依据 ARCH-TEST-001）。删除 `core/event_bridge/sinks/hindsight.py`（-196 行）与 `test_event_bridge_hindsight.py`（-10 用例），新建 `sinks/supermemory.py`（urllib 直发 `POST https://api.supermemory.ai/v3/documents`，camelCase payload）与 `test_event_bridge_supermemory.py`（+9 用例 S1-S9）。daemon 条件改 `SUPERMEMORY_API_KEY`，launchd plist wrap zsh 源 `~/.hermes/.env`。container_tag 映射：regent → `hermes-cabinet`，default/其他 → fallback `hermes`。当前共 52 个 event_bridge 测试全绿；部署同步完成，已观测到 `dispatch: {'obsidian/regent': 1, 'supermemory/regent': 1}`。文档全面同步：methodology / EmpireThread v2 缩窄版 / 综合设计文档 v1.0 / 路线图 / step4 调查报告 / s6m-a2a-optimization。

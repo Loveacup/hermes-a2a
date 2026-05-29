@@ -35,12 +35,25 @@ hermes-a2a/
 ├── s6m-config/                    # 🏯 三省六部部署配置（业务专属）
 │   ├── plists/                    # 16 个 launchd plist 副本
 │   ├── docs/
-│   │   ├── methodology.md         # ADR-001~004
+│   │   ├── methodology.md         # ADR-001~005
 │   │   ├── tracking.md            # 项目追踪 (同步至 Obsidian)
-│   │   ├── architecture-comparison.md
-│   │   ├── deployment-report.md
-│   │   ├── s6m-a2a-optimization.md  # 三大支柱方案
-│   │   └── audits/                # 审计报告
+│   │   ├── tdd-plan-review.md     # TDD 计划审查
+│   │   ├── tdd-test-plan.md       # TDD 测试计划
+│   │   ├── design/                # 设计方案
+│   │   │   ├── EmpireThread_事件桥_v2_缩窄版.md
+│   │   │   ├── EmpireThread_事件桥_综合设计文档_v1.0.md
+│   │   │   ├── Hermes_路线图_v1.0.md
+│   │   │   └── ROLEPLAY_cold_start_optimization.md
+│   │   ├── optimization/          # 优化方案
+│   │   │   ├── s6m-a2a-optimization.md
+│   │   │   ├── s6m-a2a-optimization-v2.md
+│   │   │   └── resource-optimization-investigation.md
+│   │   ├── deployment/            # 部署与调查
+│   │   │   ├── deployment-report.md
+│   │   │   ├── architecture-comparison.md
+│   │   │   └── empirethread-step4-investigation.md
+│   │   ├── audits/                # 审计报告
+│   │   └── archives/              # 归档数据
 │   ├── port-map.md                # 16 profile 端口快查（doctor 读它）
 │   ├── discuss-modes.yaml          # 讨论模式配置
 │   └── README.md                  # 三省六部部署文档
@@ -82,7 +95,7 @@ HOME=/Users/alexcai launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.herme
 1. **HOME hack**：Hermes session 改了 HOME，`launchctl` 必须前置 `HOME=/Users/alexcai` 才能找到 `~/Library/LaunchAgents/`
 2. **每次改 core 都要同步**：源码在 `~/code/hermes-a2a/core/`，部署在 `~/.hermes/plugins/hermes-a2a/`，**两边必须保持一致** —— 修部署不同步源码是 P0 错误（参考 audits/02-reaudit.md NEW-P0-A）
 3. **CC Agent Team**：大型任务（方法论、架构审查、跨模块重构）拉 CC agent team
-4. **Obsidian 同步**：`s6m-config/docs/tracking.md` 和 `methodology.md` 同步到 Obsidian `00-Inbox/`
+4. **Obsidian 同步**：`s6m-config/docs/tracking.md` 和 `methodology.md` 同步到 Obsidian `20-Areas/10_AI实践/三省六部_Hermes/20_实施/追踪/` 和 `20_实施/方法/`
 5. **本地测试先行**：改代码后先 curl 验证，再 commit；改 plist 后必须 bootout + bootstrap + curl
 6. **Conventional Commits**：`feat:` / `fix:` / `docs:` / `refactor:`
 

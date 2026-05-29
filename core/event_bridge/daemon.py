@@ -4,8 +4,8 @@ KeepAlive=true，每 N 秒一个 tick，每次发现并 dispatch 全 profile JSO
 W2 后接入 fsevents/kqueue 加速；当前用纯轮询.
 
 Tick 内做两件事：
-1. dispatch_all: empire-thread.jsonl → sink.write (Obsidian 直写、Hindsight 入 pending)
-2. flush_pending: 凡是 Sink 暴露 flush_pending() 都调用一次（Hindsight 的网络投递）
+1. dispatch_all: empire-thread.jsonl → sink.write (Obsidian 直写、Supermemory 直发)
+2. flush_pending: 凡是 Sink 暴露 flush_pending() 都调用一次（保留 hook，便于未来扩展）
 """
 from __future__ import annotations
 
@@ -18,17 +18,17 @@ from typing import Iterable
 from .core import Sink, dispatch_all
 from .paths import jsonl_paths_for_all_profiles
 from .sinks.obsidian import ObsidianSink
-from .sinks.hindsight import HindsightSink
+from .sinks.supermemory import SupermemorySink
 
 log = logging.getLogger("event_bridge.daemon")
 
 
 def default_sinks() -> list[Sink]:
     sinks: list[Sink] = [ObsidianSink()]
-    if os.environ.get("HINDSIGHT_API_KEY"):
-        sinks.append(HindsightSink())
+    if os.environ.get("SUPERMEMORY_API_KEY"):
+        sinks.append(SupermemorySink())
     else:
-        log.info("HINDSIGHT_API_KEY 未设置，跳过 HindsightSink")
+        log.info("SUPERMEMORY_API_KEY 未设置，跳过 SupermemorySink")
     return sinks
 
 

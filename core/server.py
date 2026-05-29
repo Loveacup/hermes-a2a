@@ -33,7 +33,7 @@ from auth import (
     load_or_create_token,
 )
 from rate_limiter import DEFAULT_LIMITER
-from audit_hook import score_task, maybe_alert
+from audit_hook import score_task, maybe_alert, emit_empire_event
 import registry as _registry
 import paths
 
@@ -298,6 +298,13 @@ def _execute_task(tid: str) -> None:
         except Exception:
             logger.exception(
                 "event=alert_error task_id=%s profile=%s", tid, profile,
+            )
+        # EmpireThread emit (best-effort, never blocks task completion)
+        try:
+            emit_empire_event(result)
+        except Exception:
+            logger.exception(
+                "event=emit_empire_event_error task_id=%s profile=%s", tid, profile,
             )
         _store.save(result)
         status = result.get("status", "?")

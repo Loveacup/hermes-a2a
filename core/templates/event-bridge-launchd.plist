@@ -7,11 +7,9 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>{{PYTHON}}</string>
-        <string>-m</string>
-        <string>event_bridge.daemon</string>
-        <string>--interval</string>
-        <string>1.0</string>
+        <string>/bin/zsh</string>
+        <string>-c</string>
+        <string>if [ -f "$HOME/.hermes/.env" ]; then export SUPERMEMORY_API_KEY="$(grep -E '^SUPERMEMORY_API_KEY=' "$HOME/.hermes/.env" | tail -1 | cut -d= -f2-)"; fi; exec {{PYTHON}} -m event_bridge.daemon --interval 1.0</string>
     </array>
 
     <key>WorkingDirectory</key>

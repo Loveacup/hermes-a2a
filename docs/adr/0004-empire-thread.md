@@ -9,7 +9,7 @@
 EmpireThread 是三省六部治理体系的事件溯源层，负责：
 - 跨 profile 的事件流标准化（10 种 XML 标签）
 - 上下文标签集渲染（context_tags.py → `<system_history>`）
-- MEMORY_QUERY 事件桥（A2A Task 承载，Hindsight 只读查询）
+- MEMORY_QUERY 事件桥（A2A Task 承载，长期记忆只读查询；后端为 Supermemory，详见 [[methodology#ADR-005]]）
 
 随着 hermes-a2a 讨论编排引擎（ROLEPLAY + SYNTHESIZE）的落地，需要明确体系中所有角色的拓扑关系。
 
@@ -74,7 +74,7 @@ EmpireThread 是三省六部治理体系的事件溯源层，负责：
 
 - 小黄的 profile 配置、skills、memory 独立维护，不与三省六部部门 profile 混合管理
 - A2A 讨论的 prompt 中明确身份声明（已实现在 `discuss.py` 和 `task_handler.py` 中）
-- 未来 EmpireThread MEMORY_QUERY 事件桥中，小黄可作为独立的 Hindsight bank 查询源
+- 未来 EmpireThread MEMORY_QUERY 事件桥中，小黄可作为独立的长期记忆查询源（Supermemory container_tag = `hermes`，与三省六部其他 profile 通过 container_tag 隔离；详见 ADR-005）
 - 内阁群对话中，小黄发言代表个人判断，不代三省六部决策
 
 ## 关联文档

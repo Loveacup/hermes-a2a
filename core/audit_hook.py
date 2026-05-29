@@ -21,6 +21,13 @@ amputation rationale.
 
 from __future__ import annotations
 
+import json
+import os
+import pwd
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
 
 # ---------------------------------------------------------------------------
 # Task scoring (score-only mode)
@@ -110,9 +117,82 @@ def maybe_alert(task: dict) -> dict | None:
     return {"task_id": tid, "score": score, "alerted": True}
 
 
+# ---------------------------------------------------------------------------
+# EmpireThread event emission (P0-3 — wires A2A task completion → event bridge)
+# ---------------------------------------------------------------------------
+
+
+def _hermes_root() -> Path:
+    """Resolve shared ~/.hermes root even when HOME is per-profile hijacked.
+
+    Mirrors core.paths.hermes_root to avoid cross-package import cost.
+    """
+    override = os.environ.get("HERMES_ROOT", "").strip()
+    if override:
+        return Path(override).expanduser()
+    hh = os.environ.get("HERMES_HOME", "").strip()
+    if hh:
+        p = Path(hh).expanduser()
+        parts = p.parts
+        if ".hermes" in parts:
+            idx = parts.index(".hermes")
+            return Path(*parts[: idx + 1])
+    return Path(pwd.getpwuid(os.getuid()).pw_dir) / ".hermes"
+
+
+def emit_empire_event(task: dict) -> dict:
+    """Append a task_completed event to ``{profile_home}/empire-thread.jsonl``.
+
+    Atomic write: existing bytes + new line → tmp file → ``os.replace`` to
+    target so the daemon never reads a half-written line. Caller (server.py)
+    wraps in try/except and logs failures via ``logger.exception``.
+
+    Returns the emitted event dict (for tests / logging).
+    """
+    profile = os.environ.get("HERMES_PROFILE", "default")
+    target = _hermes_root() / "profiles" / profile / "empire-thread.jsonl"
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    artifact = task.get("artifact") if isinstance(task.get("artifact"), dict) else {}
+    audit_score = artifact.get("audit_score") or task.get("audit_score")
+
+    event = {
+        "event_id": str(uuid.uuid4()),
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "profile": profile,
+        "event": "task_completed",
+        "data": {
+            "status": task.get("status"),
+            "semantic_status": task.get("semantic_status"),
+            "completion_reason": task.get("completion_reason"),
+            "duration_s": artifact.get("actual_duration_s"),
+            "audit_score": audit_score,
+        },
+        "task_id": task.get("id", "") or "",
+        "source": "audit_hook",
+    }
+    line = (json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8")
+
+    existing = target.read_bytes() if target.exists() else b""
+    tmp = target.with_name(
+        f"{target.name}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    )
+    try:
+        tmp.write_bytes(existing + line)
+        os.replace(tmp, target)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+    return event
+
+
 __all__ = [
     "score_task",
     "maybe_alert",
+    "emit_empire_event",
     "ALERT_THRESHOLD",
     "ALERT_COOLDOWN_S",
     "ALERT_ASSIGNEE",

@@ -98,7 +98,7 @@
 
 ### docs 支柱的风险
 - ⚠️ Obsidian sync churn：每次 docs_generator 跑都重写文件 → Obsidian iCloud 来回同步；必须做 hash diff
-- ⚠️ A2A `/a2a/tasks` 列表端点不存在：agent #3 已经指出现在拉不到完整任务史，要先在 server.py 加 list endpoint，或用 hindsight 数据库代替
+- ⚠️ A2A `/a2a/tasks` 列表端点不存在：agent #3 已经指出现在拉不到完整任务史，要先在 server.py 加 list endpoint，或用 Supermemory 长期记忆后端代替（ADR-005 已确立 Supermemory 为唯一长期记忆后端）
 - ⚠️ 16 endpoints 同时 timeout：docs_generator 单线程顺序拉，最坏 16×3s=48s；可以接受，但极端情况建议加 ThreadPoolExecutor
 
 ## 三个 agent 的产出归档与判读

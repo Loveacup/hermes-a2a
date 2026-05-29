@@ -19,28 +19,31 @@
 
 ### 🥇 EmpireThread 事件桥 — 打通多记忆系统
 
-**目标**：EmpireThread JSONL 事件流 → 主动 fan-out 到 Hindsight / Obsidian / MEMORY.md / Session DB。
+**目标**：EmpireThread JSONL 事件流 → 主动 fan-out 到 Obsidian + Supermemory（v2 缩窄 + ADR-005 单层架构）。
 
-**状态**：设计完成 ✅ | 实施待启动 ⏳
+**状态**：设计完成 ✅ | 代码与测试已 production-ready ✅ | 生产 emit/launchd 待打通 ⏳
 
-**设计资产**（CC 3 Agent 评估 + 5 加固项设计）：
-- 评估报告：`三省六部_Hermes/10_制度/EmpireThread_事件桥_CC评估报告_20260528.md`
-- 设计文档：`三省六部_Hermes/20_实施/event-bridge-eval/design-g1~g5.md`
-- 工作区：`~/.hermes/workspaces/event-bridge-eval/`
+**设计资产**（CC 3 Agent 评估 + 5 加固项设计 → v2 缩窄 → Supermemory 替换）：
+- 综合设计文档 v1.0：`s6m-config/docs/EmpireThread_事件桥_综合设计文档_v1.0.md`
+- v2 缩窄版（删 MEMORY.md / Session DB）：`s6m-config/docs/EmpireThread_事件桥_v2_缩窄版.md`
+- step4 实施状态调查：`s6m-config/docs/empirethread-step4-investigation.md`
+- ADR-005 Hindsight → Supermemory：`s6m-config/docs/methodology.md`
 
-**核心架构**：Event Sourcing + Sink 插件模式
+**核心架构**：Event Sourcing + 双 sink 单层
 ```
-事件源 → EmpireThread(JSONL) → EventBridge → [MEMORY, Obsidian, Hindsight, SessionDB]
+事件源 → EmpireThread(JSONL) → EventBridge → [Obsidian, Supermemory]
 ```
 
-**5 加固项（实施前置条件）**：
-- G1: 异步 out-of-band dispatch（launchd sidecar）
-- G2: 倒排索引 + cursor 增量消费
-- G3: `_source` 白名单 + 重入计数（防自触发死循环）
-- G4: MEMORY.md `flock` + 原子 rename
-- G5: 队列强制落盘 `pending.jsonl`
+跨 profile 通知走 kanban_notify_subs；MEMORY.md / Session DB 已在 v2 缩窄版删除（让位 hermes-cli 原生能力 + kanban events 表）。
 
-**实施估算**：3 周，~550 行 Python（W1 核心+MEMORY → W2 Obsidian → W3 Hindsight+SessionDB）
+**加固项（v2 + ADR-005 后状态）**：
+- G1: 异步 out-of-band dispatch（launchd sidecar）✅ 保留
+- G2: cursor 增量消费 ✅ 保留（倒排索引在 2-Sink 下简化为直接遍历）
+- G3: `_source` 白名单 ✅ 保留（重入计数随 MEMORY.md 删除）
+- G4: MEMORY.md `flock` + 原子 rename ❌ 删除（整 sink 已移除）
+- G5: 队列强制落盘 `pending.jsonl` ⚠️ 仅 Obsidian sink 走队列；**Supermemory sink 简化为 best-effort 直发**（ADR-005，不入队、不重试、失败吞掉记 warning）
+
+**实施估算**（已完成）：~300 行 Python（v2 缩窄从 ~550 行降）；Supermemory sink ~80 行；当前共 52 个 event_bridge 测试全绿。
 
 ---
 
@@ -130,3 +133,4 @@
 | 日期 | 变更 |
 |------|------|
 | 2026-05-28 | 初始创建。收录 5 方向优先级 + 事件桥 CC 评估 + G1-G5 设计方案 |
+| 2026-05-30 | EventBridge sink 替换：Hindsight → Supermemory（ADR-005 单层架构，决策依据 ARCH-TEST-001）。代码与测试已落地（52/52 绿），文档全面同步。 |
