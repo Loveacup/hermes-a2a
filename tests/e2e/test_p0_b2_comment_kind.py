@@ -1,304 +1,302 @@
 #!/usr/bin/env python3
-"""E2E Phase 1B: DCI comment_kind routing + Scheme D bypass table.
+"""E2E Phase 1B: DCI comment_kind routing + Scheme D bypass table (v2).
 
 Tests:
-  B1: Create cards with different DCI kinds, verify correct routing
+  B1: Live-kanban comment routing — post a comment, classify, record,
+      then assert orchestrator_router picks the expected next-actor profile.
   B2: Verify Scheme D bypass table (a2a_comment_kinds) is populated correctly
-  B3: Verify upstream task_comments isolation (no schema change)
+      after B1 writes.
+  B3: Verify upstream task_comments isolation (no schema change).
 
-The 14 DCI kinds from comment_kind.py:
-  PROPOSE, EVIDENCE_FOR, EVIDENCE_AGAINST, CHALLENGE, CLARIFY,
-  SYNTHESIZE, CONCEDE, ASK, VETO, DECISION, AMEND, REFER, NOTE, ACKNOWLEDGE
+Rewrite rationale (replaces v1):
+  v1 created tasks via `kanban create --assignee shangshu` and embedded
+  "kind=CHALLENGE" as a string in the task body, expecting the dispatcher to
+  parse that keyword and reassign the task. That conflated two different
+  routing layers:
+    (A) Task assignment — hermes upstream dispatcher reads task.assignee
+    (B) Comment routing — orchestrator_router.route_comment over thread entries
+  Only layer (B) is implemented; v1 tested layer (A) with layer (B)'s
+  expectations. v1 also referenced kinds that don't exist (VETO, DECISION)
+  and wrong targets (EVIDENCE_FOR → budget; actual: archivist).
 
-Key routing rules (from orchestrator_router.py ROUTE_BY_KIND):
-  CHALLENGE → regent
-  VETO → regent
-  ASK → hanlinyuan
-  EVIDENCE_FOR → budget
-  EVIDENCE_AGAINST → budget
-  DECISION → reviewer
+  v2 exercises the real layer (B) pipeline: create anchor task → post
+  comment → classify → record_kind → route_comment → assert target.
 
 Prerequisites:
   - Phase 1A completed
-  - Scheme D migration applied (001_a2a_comment_kinds.sql)
-  - 16/16 A2A healthy
+  - Scheme D migration applied (001_a2a_comment_kinds.sql) — production
+  - 16/16 A2A healthy (not strictly needed; classifier + router are pure)
 
 Usage:
   python tests/e2e/test_p0_b2_comment_kind.py
 """
 
+import json
 import os
+import sqlite3
 import subprocess
 import sys
 import time
-import json
-import sqlite3
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
 
-TZ = timezone(timedelta(hours=8))
-TIMEOUT_PER_CARD = 180
-POLL_INTERVAL = 10
+ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(ROOT / "core"))
+
+import comment_kind as ck                # noqa: E402
+import comment_kind_classifier as cls    # noqa: E402
+import orchestrator_router as orx        # noqa: E402
+
 KANBAN_DB = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")) / "kanban.db"
 
-# Critical routing pairs: (kind, expected_assignee)
-ROUTING_TESTS = [
-    ("CHALLENGE", "regent", "挑战类必须路由到太子"),
-    ("VETO", "regent", "否决类必须路由到太子"),
-    ("ASK", "hanlinyuan", "提问类路由到翰林院"),
-    ("EVIDENCE_FOR", "budget", "举证支持路由到户部"),
-    ("DECISION", "reviewer", "决策类路由到门下省"),
+# (body_template, expected_kind, expected_target_profile)
+# Body templates chosen to hit either the prefix or the heuristic path of
+# comment_kind_classifier. Targets come from orchestrator_router.ROUTE_BY_KIND.
+ROUTING_CASES = [
+    ("[CHALLENGE] 该方案在并发写入下数据丢失",
+     ck.CommentKind.CHALLENGE, "regent"),
+    ("[ASK] 请问当前 retry 策略指数退避还是固定间隔",
+     ck.CommentKind.ASK, "hanlinyuan"),
+    ("根据 G²CP 论文 arxiv 2602.13370 的数据显示，结构化通信可减少 73% token",
+     ck.CommentKind.EVIDENCE_FOR, "archivist"),
+    ("[evidence_against] 实测数据反驳：延迟反而升高 12%",
+     ck.CommentKind.EVIDENCE_AGAINST, "archivist"),
+    ("【监国处置】此事须仲裁",
+     ck.CommentKind.META_DIRECTIVE, "regent"),
+    ("[SYNTHESIZE] 综合各方意见，先小流量再全量",
+     ck.CommentKind.SYNTHESIZE, "regent"),
 ]
 
 
+# ─── helpers ────────────────────────────────────────────────────
+
 def hermes(*args, timeout=30):
-    cmd = ["hermes"] + list(args)
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    p = subprocess.run(["hermes", *args], capture_output=True, text=True, timeout=timeout)
     return p.stdout.strip(), p.stderr.strip(), p.returncode
 
 
-def kanban_create(title, assignee, skill, body, timeout=30):
-    """Create card and return ID."""
-    args = ["kanban", "create", title, "--assignee", assignee, "--body", body, "--json"]
-    if skill:
-        args.extend(["--skill", skill])
-    stdout, stderr, rc = hermes(*args, timeout=timeout)
+def kanban_create_anchor(title: str) -> str | None:
+    """Create a minimal anchor task; assignee doesn't matter for routing."""
+    stdout, stderr, rc = hermes(
+        "kanban", "create", title, "--assignee", "default",
+        "--body", "B test anchor — not for spawn", "--json",
+    )
     if rc != 0:
-        print(f"  ❌ create failed: {stderr}")
+        print(f"  ❌ kanban create failed: {stderr}")
         return None
     try:
-        data = json.loads(stdout)
-        return data.get("id")
-    except json.JSONDecodeError:
-        for line in stdout.split("\n"):
-            for p in line.split():
-                if p.startswith("t_"):
-                    return p
-    return None
-
-
-def kanban_show(card_id, timeout=30):
-    stdout, stderr, rc = hermes("kanban", "show", card_id, "--json", timeout=timeout)
-    if rc != 0:
-        return None
-    try:
-        return json.loads(stdout)
+        return json.loads(stdout).get("id")
     except json.JSONDecodeError:
         return None
 
-def card_status(card):
-    if card is None:
-        return "unknown"
-    return card.get("task", {}).get("status", "unknown")
 
-def card_assignee(card):
-    if card is None:
-        return "unknown"
-    return card.get("task", {}).get("assignee", "unknown")
-
-def card_summary(card):
-    if card is None:
-        return ""
-    return card.get("latest_summary", "") or ""
+def kanban_post_comment(task_id: str, body: str) -> bool:
+    """Post a comment via the CLI so it goes through the real write path."""
+    stdout, stderr, rc = hermes("kanban", "comment", task_id, body)
+    if rc != 0:
+        print(f"  ❌ comment failed: {stderr}")
+        return False
+    return True
 
 
-def wait_for_completion(card_id, timeout=TIMEOUT_PER_CARD):
-    start = time.time()
-    last_status = None
-    while time.time() - start < timeout:
-        card = kanban_show(card_id)
-        if card is None:
-            time.sleep(POLL_INTERVAL)
-            continue
-        status = card_status(card)
-        if status != last_status:
-            print(f"  [{int(time.time()-start)}s] {card_id}: {status}")
-            last_status = status
-        if status in ("done", "blocked", "cancelled"):
-            return card
-        time.sleep(POLL_INTERVAL)
-    print(f"  ⏰ TIMEOUT — last: {last_status}")
-    return kanban_show(card_id)
+def latest_comment_id_for(conn, task_id: str) -> int | None:
+    row = conn.execute(
+        "SELECT id FROM task_comments WHERE task_id = ? "
+        "ORDER BY created_at DESC, id DESC LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    return row[0] if row else None
 
 
-def check_scheme_d_table():
-    """Verify a2a_comment_kinds table exists and has correct schema."""
-    db_path = str(KANBAN_DB)
-    if not Path(db_path).exists():
-        # Try alternate path
-        db_path = "/Users/alexcai/.hermes/kanban.db"
+def kanban_archive(task_id: str) -> None:
+    hermes("kanban", "archive", task_id, timeout=15)
 
+
+# ─── B1: live comment routing pipeline ──────────────────────────
+
+def test_b1_comment_routing_pipeline():
+    print("\n" + "=" * 60)
+    print("B1: comment → classify → record_kind → route_comment (live kanban)")
+    print("=" * 60)
+
+    if not KANBAN_DB.exists():
+        print(f"  ❌ kanban.db missing at {KANBAN_DB}")
+        return False
+
+    # Sanity: bypass table must exist (migration applied)
+    conn = sqlite3.connect(str(KANBAN_DB))
+    conn.row_factory = sqlite3.Row
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='a2a_comment_kinds'"
-        )
-        exists = cursor.fetchone() is not None
-        if exists:
-            columns = [row[1] for row in conn.execute("PRAGMA table_info(a2a_comment_kinds)")]
-            conn.close()
-            return True, columns
+        ok = conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name='a2a_comment_kinds'"
+        ).fetchone()
+        if not ok:
+            print("  ❌ a2a_comment_kinds table missing — apply migration first")
+            return False
+        print("  ✅ Scheme D table present")
+
+        results: dict[str, str] = {}
+        created_tasks: list[str] = []
+
+        for idx, (body, expected_kind, expected_target) in enumerate(ROUTING_CASES, 1):
+            label = expected_kind.value
+            print(f"\n  --- [{idx}/{len(ROUTING_CASES)}] {label} → {expected_target} ---")
+            print(f"      body: {body[:60]}")
+
+            tid = kanban_create_anchor(f"E2E-B1-v2 [{label}]")
+            if not tid:
+                results[label] = "CREATE_FAILED"
+                continue
+            created_tasks.append(tid)
+
+            if not kanban_post_comment(tid, body):
+                results[label] = "COMMENT_FAILED"
+                continue
+
+            # Give SQLite a beat to flush the comment write
+            time.sleep(0.3)
+
+            cid = latest_comment_id_for(conn, tid)
+            if cid is None:
+                results[label] = "NO_COMMENT_ROW"
+                continue
+
+            # Classify
+            classified = cls.classify(body)
+            if classified is None:
+                results[label] = "CLASSIFY_NONE"
+                print(f"      ❌ classifier returned None for body")
+                continue
+            if classified != expected_kind:
+                results[label] = f"CLASSIFY_MISMATCH: got {classified.value}"
+                print(f"      ❌ classifier returned {classified.value}, "
+                      f"expected {expected_kind.value}")
+                continue
+            print(f"      ✓ classifier: {classified.value}")
+
+            # Record into bypass table
+            try:
+                ck.record_kind(conn, comment_id=cid, kind=classified, task_id=tid)
+            except (ValueError, sqlite3.IntegrityError) as e:
+                results[label] = f"RECORD_FAILED: {e}"
+                continue
+
+            # Read thread + grab the entry we just recorded
+            thread = ck.get_thread(conn, tid)
+            entry = next((e for e in thread if e.comment_id == cid), None)
+            if entry is None:
+                results[label] = "THREAD_MISS"
+                continue
+            if entry.kind != expected_kind.value:
+                results[label] = f"VIEW_KIND_MISMATCH: {entry.kind}"
+                continue
+            print(f"      ✓ a2a_thread_view: kind={entry.kind} "
+                  f"has_a2a_record={entry.has_a2a_record}")
+
+            # Route the comment via orchestrator
+            routing = orx.route_comment(entry)
+            if routing is None:
+                results[label] = "NO_ROUTING"
+                print(f"      ❌ route_comment returned None (kind has no route)")
+                continue
+            if routing.target_profile != expected_target:
+                results[label] = (f"ROUTE_MISMATCH: target={routing.target_profile} "
+                                  f"expected={expected_target}")
+                print(f"      ❌ route → {routing.target_profile}, "
+                      f"expected {expected_target}")
+                continue
+
+            results[label] = "PASS"
+            print(f"      ✅ route → {routing.target_profile} "
+                  f"({routing.reason})")
+
+        # Cleanup
+        for tid in created_tasks:
+            kanban_archive(tid)
+
+        pass_count = sum(1 for v in results.values() if v == "PASS")
+        total = len(results)
+        print(f"\n  B1 Summary: {pass_count}/{total} routing pipelines passed")
+        if pass_count < total:
+            print("  Failures:")
+            for k, v in results.items():
+                if v != "PASS":
+                    print(f"    {k}: {v}")
+        return pass_count == total
+    finally:
         conn.close()
-        return False, []
-    except Exception as e:
-        return False, str(e)
 
 
-def test_b1_routing_table():
-    """B1: Verify DCI kind routing works for known pairs.
-
-    For each (kind, expected_assignee), create a card and verify it
-    was dispatched to the correct profile.
-    """
-    print("\n" + "="*60)
-    print("B1: DCI kind routing verification")
-    print("="*60)
-
-    # First check Scheme D table
-    table_ok, columns = check_scheme_d_table()
-    if table_ok:
-        print(f"  ✅ Scheme D table exists: columns={columns}")
-    else:
-        print(f"  ⚠️  Scheme D table check: {columns}")
-        # Don't fail — table may exist but at different path
-
-    results = {}
-    for kind, expected_assignee, reason in ROUTING_TESTS:
-        print(f"\n  --- {kind} → {expected_assignee} ({reason}) ---")
-
-        card_id = kanban_create(
-            title=f"E2E-B1: {kind} routing test",
-            assignee="shangshu",  # Start at dispatcher, let it route
-            skill=None,
-            body=f"这是一个 DCI kind={kind} 的测试消息。请确认你收到的任务，并说明你是哪个部门的 agent。"
-        )
-
-        if not card_id:
-            results[kind] = "CREATE_FAILED"
-            continue
-
-        print(f"  📋 Card: {card_id}")
-        card = wait_for_completion(card_id)
-
-        if not card:
-            results[kind] = "TIMEOUT"
-            continue
-
-        actual_assignee = card_assignee(card)
-        status = card_status(card)
-
-        # Check: was it assigned to expected profile?
-        match = actual_assignee == expected_assignee
-        results[kind] = "PASS" if match else f"MISMATCH: got {actual_assignee}"
-
-        status_icon = "✅" if match else "❌"
-        print(f"  {status_icon} {kind}: expected={expected_assignee}, actual={actual_assignee}, status={status}")
-
-    return results
-
+# ─── B2: bypass table population ─────────────────────────────────
 
 def test_b2_bypass_table_population():
-    """B2: Verify Scheme D table is populated with correct data.
-
-    After B1 creates cards with DCI kinds, check the a2a_comment_kinds
-    table for corresponding entries.
-    """
-    print("\n" + "="*60)
-    print("B2: Scheme D bypass table population")
-    print("="*60)
-
-    db_path = "/Users/alexcai/.hermes/kanban.db"
-    if not Path(db_path).exists():
-        print(f"  ⚠️  kanban.db not at {db_path}")
+    print("\n" + "=" * 60)
+    print("B2: Scheme D bypass table population (kinds from B1 writes)")
+    print("=" * 60)
+    if not KANBAN_DB.exists():
+        print(f"  ❌ kanban.db missing at {KANBAN_DB}")
         return False
 
+    conn = sqlite3.connect(str(KANBAN_DB))
     try:
-        conn = sqlite3.connect(db_path)
-        count = conn.execute("SELECT COUNT(*) FROM a2a_comment_kinds").fetchone()[0]
+        count = conn.execute(
+            "SELECT COUNT(*) FROM a2a_comment_kinds"
+        ).fetchone()[0]
         print(f"  📊 Total rows in a2a_comment_kinds: {count}")
 
-        # Check for rows with our test kinds
-        kinds_found = set()
-        for row in conn.execute(
-            "SELECT DISTINCT kind FROM a2a_comment_kinds ORDER BY kind"
-        ):
-            kinds_found.add(row[0])
+        kinds_present = {
+            row[0] for row in conn.execute(
+                "SELECT DISTINCT kind FROM a2a_comment_kinds"
+            )
+        }
+        print(f"  🏷️  Distinct kinds: {sorted(kinds_present)}")
 
-        print(f"  🏷️  Distinct kinds in table: {sorted(kinds_found)}")
-
-        # Verify at least some of our test kinds are present
-        test_kinds = {k for k, _, _ in ROUTING_TESTS}
-        present = kinds_found & test_kinds
-
-        if present:
-            print(f"  ✅ Test kinds found: {sorted(present)}")
-        else:
-            print(f"  ⚠️  No test kinds found in table (may need B1 to run first)")
-
+        expected = {kind.value for _, kind, _ in ROUTING_CASES}
+        missing = expected - kinds_present
+        if missing:
+            print(f"  ❌ Missing kinds (B1 should have populated): {sorted(missing)}")
+            return False
+        print(f"  ✅ All expected kinds present: {sorted(expected)}")
+        return True
+    finally:
         conn.close()
-        return len(present) > 0
 
-    except sqlite3.OperationalError as e:
-        print(f"  ❌ SQLite error: {e}")
-        return False
 
+# ─── B3: upstream isolation ─────────────────────────────────────
 
 def test_b3_upstream_isolation():
-    """B3: Verify upstream task_comments table is NOT modified.
-
-    The Scheme D approach guarantees zero changes to Hermes upstream.
-    Verify task_comments still has no 'kind' or 'in_reply_to' columns.
-    """
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("B3: Upstream task_comments isolation check")
-    print("="*60)
-
-    db_path = "/Users/alexcai/.hermes/kanban.db"
+    print("=" * 60)
+    conn = sqlite3.connect(str(KANBAN_DB))
     try:
-        conn = sqlite3.connect(db_path)
         columns = [
             row[1] for row in conn.execute("PRAGMA table_info(task_comments)")
         ]
-        conn.close()
-
         forbidden = ["kind", "in_reply_to"]
         violations = [c for c in forbidden if c in columns]
-
         print(f"  📋 task_comments columns: {columns}")
         if violations:
             print(f"  ❌ FAIL: upstream table modified! Found: {violations}")
             return False
-        else:
-            print(f"  ✅ PASS: upstream task_comments untouched (no kind/in_reply_to)")
-            return True
-
-    except Exception as e:
-        print(f"  ⚠️  Could not verify: {e}")
-        return False
+        print(f"  ✅ PASS: upstream task_comments untouched (no kind/in_reply_to)")
+        return True
+    finally:
+        conn.close()
 
 
 def main():
-    results = {}
+    results = {
+        "B1": test_b1_comment_routing_pipeline(),
+        "B2": test_b2_bypass_table_population(),
+        "B3": test_b3_upstream_isolation(),
+    }
 
-    # B1: routing test
-    routing_results = test_b1_routing_table()
-    pass_count = sum(1 for v in routing_results.values() if v == "PASS")
-    fail_count = len(routing_results) - pass_count
-    print(f"\n  B1 Summary: {pass_count}/{len(routing_results)} routing tests passed")
-    results["B1"] = pass_count == len(routing_results)
-
-    # B2: table population
-    results["B2"] = test_b2_bypass_table_population()
-
-    # B3: upstream isolation
-    results["B3"] = test_b3_upstream_isolation()
-
-    print("\n" + "="*60)
-    print("PHASE 1B RESULTS")
-    print("="*60)
+    print("\n" + "=" * 60)
+    print("PHASE 1B RESULTS (v2 — comment-routing pipeline)")
+    print("=" * 60)
     for name, passed in results.items():
         print(f"  {name}: {'✅ PASS' if passed else '❌ FAIL'}")
-
     all_pass = all(results.values())
     print(f"\n  Overall: {'✅ ALL PASS' if all_pass else '❌ SOME FAILED'}")
     return 0 if all_pass else 1

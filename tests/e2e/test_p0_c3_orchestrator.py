@@ -1,47 +1,76 @@
 #!/usr/bin/env python3
-"""E2E Phase 1C: orchestrator_router — ROUTE_BY_KIND + VoteTally + deadlock guard.
+"""E2E Phase 1C: orchestrator_router — VoteTally + deadlock guard + debate (v2).
 
 Tests:
-  C1: VoteTally — multi-agent vote verification
-  C2: Deadlock guard — verify deadlock detection triggers
-  C3: Comprehensive debate — 三省真实辩论 (翰林院/工部/太子)
+  C1: VoteTally — post real VOTE_FOR/VOTE_AGAINST/ABSTAIN comments to a
+      live kanban task, classify each, and verify ``aggregate_votes`` and
+      ``majority`` match the expected tally.
+  C2: Deadlock guard — two real kanban cards depending on each other reach a
+      terminal state; we also drive the kind-side deadlock detector with three
+      same-kind comments to verify ``detect_deadlock`` fires.
+  C3: Five-turn debate — post one comment per DCI turn through the live CLI,
+      classify each, and assert at least four distinct kinds are recorded
+      in ``a2a_comment_kinds`` for the same task (thread integrity).
+
+Rewrite rationale (replaces v1):
+  v1 asked a single regent LLM worker to "orchestrate a three-province
+  debate" in one chat turn, then waited 300s for status=done. The worker
+  has no multi-agent tools — it just produces text. Even successful runs
+  wouldn't produce A2A protocol calls; the test asked the wrong layer.
+
+  v2 mirrors the B v2 approach: drive the *real* kanban write path
+  (`hermes kanban create` / `hermes kanban comment`) so every artifact
+  hits production sqlite, then run the orchestrator primitives against the
+  resulting thread. No LLM in the loop; orchestrator behaviour is the
+  contract under test.
 
 Prerequisites:
-  - Phase 1A + 1B completed
-  - 16/16 A2A healthy
-  - Scheme D table exists
+  - Scheme D migration applied (001_a2a_comment_kinds.sql)
+  - kanban dispatcher running so C2 cards reach terminal state
+  - kanban.db integrity ok
 
 Usage:
   python tests/e2e/test_p0_c3_orchestrator.py
 """
 
+import json
+import os
+import sqlite3
 import subprocess
 import sys
 import time
-import json
-import sqlite3
-import os
 from pathlib import Path
 
-TZ = __import__('datetime').timezone(__import__('datetime').timedelta(hours=8))
-TIMEOUT_PER_CARD = 300  # orchestrator/debate may take longer
-POLL_INTERVAL = 10
-KANBAN_DB = "/Users/alexcai/.hermes/kanban.db"
+ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(ROOT / "core"))
 
+import comment_kind as ck                # noqa: E402
+import comment_kind_classifier as cls    # noqa: E402
+import orchestrator_router as orx        # noqa: E402
+
+KANBAN_DB = Path(os.environ.get("HERMES_HOME",
+                                Path.home() / ".hermes")) / "kanban.db"
+TIMEOUT_PER_CARD = 240  # C2 spawns real LLM workers
+POLL_INTERVAL = 10
+
+
+# ─── CLI helpers ────────────────────────────────────────────────
 
 def hermes(*args, timeout=30):
-    cmd = ["hermes"] + list(args)
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    p = subprocess.run(["hermes", *args],
+                       capture_output=True, text=True, timeout=timeout)
     return p.stdout.strip(), p.stderr.strip(), p.returncode
 
 
-def kanban_create(title, assignee, skill, body, timeout=30):
-    args = ["kanban", "create", title, "--assignee", assignee, "--body", body, "--json"]
+def kanban_create(title: str, assignee: str = "default",
+                  body: str = "", skill: str | None = None) -> str | None:
+    args = ["kanban", "create", title, "--assignee", assignee,
+            "--body", body or f"{title} — anchor", "--json"]
     if skill:
-        args.extend(["--skill", skill])
-    stdout, stderr, rc = hermes(*args, timeout=timeout)
+        args += ["--skill", skill]
+    stdout, stderr, rc = hermes(*args)
     if rc != 0:
-        print(f"  ❌ create failed: {stderr}")
+        print(f"  ❌ kanban create failed: {stderr}")
         return None
     try:
         return json.loads(stdout).get("id")
@@ -49,8 +78,16 @@ def kanban_create(title, assignee, skill, body, timeout=30):
         return None
 
 
-def kanban_show(card_id, timeout=30):
-    stdout, stderr, rc = hermes("kanban", "show", card_id, "--json", timeout=timeout)
+def kanban_post_comment(task_id: str, body: str) -> bool:
+    stdout, stderr, rc = hermes("kanban", "comment", task_id, body)
+    if rc != 0:
+        print(f"  ❌ kanban comment failed: {stderr}")
+        return False
+    return True
+
+
+def kanban_show(task_id: str) -> dict | None:
+    stdout, _, rc = hermes("kanban", "show", task_id, "--json")
     if rc != 0:
         return None
     try:
@@ -59,229 +96,294 @@ def kanban_show(card_id, timeout=30):
         return None
 
 
-def card_status(card):
-    if card is None:
-        return "unknown"
-    return card.get("task", {}).get("status", "unknown")
+def kanban_archive(task_id: str) -> None:
+    hermes("kanban", "archive", task_id, timeout=15)
 
 
-def card_assignee(card):
-    if card is None:
-        return "unknown"
-    return card.get("task", {}).get("assignee", "unknown")
+def card_status(card: dict | None) -> str:
+    return (card or {}).get("task", {}).get("status", "unknown")
 
 
-def wait_for_completion(card_id, timeout=TIMEOUT_PER_CARD):
+def latest_comment_id_for(conn, task_id: str) -> int | None:
+    row = conn.execute(
+        "SELECT id FROM task_comments WHERE task_id = ? "
+        "ORDER BY created_at DESC, id DESC LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def wait_for_completion(card_id: str, timeout: int = TIMEOUT_PER_CARD) -> dict | None:
     start = time.time()
     last_status = None
     while time.time() - start < timeout:
         card = kanban_show(card_id)
-        if card is None:
-            time.sleep(POLL_INTERVAL)
-            continue
-        status = card_status(card)
-        if status != last_status:
-            print(f"  [{int(time.time()-start)}s] {card_id}: {status}")
-            last_status = status
-        if status in ("done", "blocked", "cancelled"):
-            return card
+        if card:
+            status = card_status(card)
+            if status != last_status:
+                print(f"  [{int(time.time() - start)}s] {card_id}: {status}")
+                last_status = status
+            if status in ("done", "blocked", "cancelled"):
+                return card
         time.sleep(POLL_INTERVAL)
+    print(f"  ⏰ TIMEOUT after {timeout}s — last status: {last_status}")
     return kanban_show(card_id)
 
 
-def get_task_kinds(task_ids):
-    """Batch query DCI kinds from a2a_comment_kinds."""
-    if not task_ids:
-        return {}
-    try:
-        conn = sqlite3.connect(KANBAN_DB)
-        placeholders = ",".join("?" for _ in task_ids)
-        rows = conn.execute(
-            f"SELECT task_id, kind FROM a2a_comment_kinds WHERE task_id IN ({placeholders})",
-            task_ids
-        ).fetchall()
-        conn.close()
-        return {row[0]: row[1] for row in rows}
-    except Exception:
-        return {}
+def post_classify_record(conn, task_id: str,
+                          body: str, expected_kind: ck.CommentKind):
+    """Post body, classify, record kind. Returns the comment row id."""
+    if not kanban_post_comment(task_id, body):
+        return None
+    time.sleep(0.3)
+    cid = latest_comment_id_for(conn, task_id)
+    if cid is None:
+        return None
+    classified = cls.classify(body)
+    if classified != expected_kind:
+        print(f"      ❌ classifier returned {classified}, expected {expected_kind}")
+        return None
+    ck.record_kind(conn, comment_id=cid, kind=classified, task_id=task_id)
+    return cid
 
+
+# ─── C1: VoteTally ───────────────────────────────────────────────
 
 def test_c1_vote_tally():
-    """C1: Verify VoteTally works correctly.
-
-    Create a debate card, let multiple agents vote, verify count.
-    """
-    print("\n" + "="*60)
-    print("C1: VoteTally — multi-agent vote aggregation")
-    print("="*60)
-
-    card_id = kanban_create(
-        title="E2E-C1: VoteTally test — should we adopt A2A preview?",
-        assignee="regent",
-        skill=None,
-        body=(
-            "你作为监国太子，请发起一个三省辩论，议题：'是否应该用 hermes-a2a-preview 替代当前 A2A 实现？'\n\n"
-            "请让翰林院(hanlinyuan)、工部(gongbu)、兵部(engineer)各发表意见（支持/反对/中立），"
-            "然后汇总投票结果。完成后请报告最终的投票计数（支持/反对/中立各多少）。\n\n"
-            "注意：这是一个 VoteTally 测试。请确保三个部门都给出了明确的投票立场。"
-        )
-    )
-    if not card_id:
+    print("\n" + "=" * 60)
+    print("C1: VoteTally — vote aggregation over real comments")
+    print("=" * 60)
+    if not KANBAN_DB.exists():
+        print(f"  ❌ kanban.db missing at {KANBAN_DB}")
         return False
 
-    print(f"  📋 Card: {card_id}")
-    card = wait_for_completion(card_id, timeout=300)
-
-    if not card or card_status(card) != "done":
-        print(f"  ❌ VoteTally card not done")
+    conn = sqlite3.connect(str(KANBAN_DB))
+    conn.row_factory = sqlite3.Row
+    tid = kanban_create("E2E-C1-v2: VoteTally anchor", assignee="default")
+    if not tid:
         return False
+    print(f"  📋 Anchor: {tid}")
 
-    summary = card.get("latest_summary", "")
-    print(f"  📝 Result: {summary[:300]}")
+    try:
+        # Three FOR, two AGAINST, one ABSTAIN → expected for=3, against=2,
+        # abstain=1, majority='for'.
+        ballot = [
+            ("[VOTE_FOR] 翰林院支持采纳 hermes-a2a-preview",
+             ck.CommentKind.VOTE_FOR),
+            ("[VOTE_FOR] 工部支持，运维负担可接受",
+             ck.CommentKind.VOTE_FOR),
+            ("[VOTE_FOR] 户部支持，本季预算够",
+             ck.CommentKind.VOTE_FOR),
+            ("[VOTE_AGAINST] 兵部反对，安全风险未审清",
+             ck.CommentKind.VOTE_AGAINST),
+            ("[VOTE_AGAINST] 御史反对，缺少回滚预案",
+             ck.CommentKind.VOTE_AGAINST),
+            ("[ABSTAIN] 史馆弃权，证据不足",
+             ck.CommentKind.ABSTAIN),
+        ]
 
-    # Look for vote-related keywords
-    has_vote = any(w in summary.lower() for w in ["票", "vote", "支持", "反对", "中立"])
-    if has_vote:
-        print(f"  ✅ PASS: VoteTally produced vote results")
-        return True
-    else:
-        print(f"  ⚠️  No explicit vote tally found — check output")
-        return False
+        for body, kind in ballot:
+            cid = post_classify_record(conn, tid, body, kind)
+            if cid is None:
+                print(f"      ❌ failed to record ballot: {body[:50]}")
+                return False
 
+        thread = ck.get_thread(conn, tid)
+        tally = orx.aggregate_votes(thread)
+        print(f"  📊 tally: for={tally.for_} against={tally.against} "
+              f"abstain={tally.abstain} total={tally.total}")
+        print(f"  🏆 majority: {tally.majority}")
+
+        ok = (tally.for_ == 3 and tally.against == 2
+              and tally.abstain == 1 and tally.majority == "for")
+        if ok:
+            print(f"  ✅ PASS: tally matches expected (3:2:1, majority=for)")
+        else:
+            print(f"  ❌ FAIL: tally mismatch")
+        return ok
+    finally:
+        kanban_archive(tid)
+        conn.close()
+
+
+# ─── C2: Deadlock guard ──────────────────────────────────────────
 
 def test_c2_deadlock_guard():
-    """C2: Verify deadlock guard triggers for circular dependencies.
-
-    Create two cards that depend on each other, verify guard triggers.
+    """Two angles:
+      (i) detect_deadlock fires after three same-kind, non-converging comments
+      (ii) two real LLM cards in a circular-dep prompt reach a terminal state
+    Either branch passes counts the test as ✅; both passing is the strong form.
     """
-    print("\n" + "="*60)
-    print("C2: Deadlock guard — circular dependency detection")
-    print("="*60)
+    print("\n" + "=" * 60)
+    print("C2: Deadlock guard — detect_deadlock + live-cards terminal state")
+    print("=" * 60)
+    if not KANBAN_DB.exists():
+        print(f"  ❌ kanban.db missing at {KANBAN_DB}")
+        return False
 
-    # Create card A that depends on card B
+    conn = sqlite3.connect(str(KANBAN_DB))
+    conn.row_factory = sqlite3.Row
+
+    # ── (i) detect_deadlock against an anchor thread ─────────────
+    tid = kanban_create("E2E-C2-v2: deadlock guard anchor", assignee="default")
+    if not tid:
+        return False
+    print(f"  📋 Anchor: {tid}")
+
+    converging = False
+    fired = False
+    try:
+        # Seed with a PROPOSE so the thread is non-vacuous, then three
+        # CHALLENGE in a row — the canonical stall pattern.
+        post_classify_record(conn, tid,
+                             "[PROPOSE] 建议改为 webhook 即时唤醒",
+                             ck.CommentKind.PROPOSE)
+        for i in range(3):
+            post_classify_record(conn, tid,
+                                 f"[CHALLENGE] 反对第 {i+1} 次：仍有同样问题",
+                                 ck.CommentKind.CHALLENGE)
+        thread = ck.get_thread(conn, tid)
+        fired = orx.detect_deadlock(thread)
+        print(f"  🚥 detect_deadlock (3 CHALLENGE in a row): {fired}")
+
+        if fired:
+            resp = orx.deadlock_response(thread) if hasattr(
+                orx, "deadlock_response") else None
+            if resp is not None:
+                print(f"  📡 deadlock_response → {resp.target_profile} "
+                      f"({resp.reason})")
+
+        # Then a CONCEDE should break the deadlock
+        post_classify_record(conn, tid,
+                             "[CONCEDE] 接受方案 B，停止僵持",
+                             ck.CommentKind.CONCEDE)
+        thread = ck.get_thread(conn, tid)
+        converging = not orx.detect_deadlock(thread)
+        print(f"  🟢 deadlock cleared after CONCEDE: {converging}")
+    finally:
+        kanban_archive(tid)
+        conn.close()
+
+    closed_form_ok = fired and converging
+    print(f"  → closed-form deadlock check: "
+          f"{'✅' if closed_form_ok else '❌'}")
+
+    # ── (ii) live cards: keep the original sanity test ───────────
     card_a = kanban_create(
-        title="E2E-C2-A: deadlock test parent",
-        assignee="gongbu",
+        "E2E-C2-v2: live deadlock parent", assignee="gongbu",
         skill="infra-health-check",
-        body="这是一个死锁测试。card B 依赖你，你也依赖 card B（循环依赖）。请尝试完成并报告是否检测到死锁。"
+        body="这是死锁测试。card B 依赖你，你也依赖 card B。报告是否检测到循环。",
     )
-    if not card_a:
-        return False
-
-    # Create card B that depends on card A
     card_b = kanban_create(
-        title="E2E-C2-B: deadlock test child",
-        assignee="engineer",
+        "E2E-C2-v2: live deadlock child", assignee="engineer",
         skill="infra-health-check",
-        body="这是一个死锁测试。card A 依赖你，你也依赖 card A（循环依赖）。请尝试完成并报告是否检测到死锁。"
+        body="这是死锁测试。card A 依赖你，你也依赖 card A。报告是否检测到循环。",
     )
-    if not card_b:
-        return False
+    if not card_a or not card_b:
+        print("  ⚠️  Could not create live cards; closed-form result stands.")
+        return closed_form_ok
 
-    print(f"  📋 Cards: A={card_a}, B={card_b}")
-
-    # Wait for both to reach terminal state
-    card_a_data = wait_for_completion(card_a, timeout=240)
-    card_b_data = wait_for_completion(card_b, timeout=240)
-
-    status_a = card_status(card_a_data)
-    status_b = card_status(card_b_data)
-
+    print(f"  📋 Live cards: A={card_a}, B={card_b}")
+    a_data = wait_for_completion(card_a)
+    b_data = wait_for_completion(card_b)
+    status_a = card_status(a_data)
+    status_b = card_status(b_data)
     print(f"  Result: A={status_a}, B={status_b}")
 
-    # Either should detect deadlock (blocked/cancelled with deadlock mention)
-    summary_a = card_a_data.get("latest_summary", "") if card_a_data else ""
-    summary_b = card_b_data.get("latest_summary", "") if card_b_data else ""
-    combined = (summary_a + " " + summary_b).lower()
+    live_ok = status_a in ("done", "blocked") and status_b in ("done", "blocked")
+    print(f"  → live-cards reached terminal: {'✅' if live_ok else '❌'}")
 
-    has_deadlock = "deadlock" in combined or "死锁" in combined or "循环" in combined
-    guarded = status_a in ("blocked", "cancelled") or status_b in ("blocked", "cancelled")
+    return closed_form_ok and live_ok
 
-    if has_deadlock or guarded:
-        print(f"  ✅ PASS: Deadlock guard triggered")
-        return True
-    else:
-        print(f"  ⚠️  Deadlock not explicitly detected, but cards reached terminal state")
-        return status_a in ("done", "blocked") and status_b in ("done", "blocked")
 
+# ─── C3: Five-turn debate ────────────────────────────────────────
 
 def test_c3_comprehensive_debate():
-    """C3: Full three-province debate with DCI kind tracking.
-
-    翰林院 + 工部 + 太子 debate on a real question. Verify:
-    - Multiple comments with different kinds
-    - Thread integrity
-    - DCI kind coverage (≥4 kinds)
+    """C3: drive a five-turn debate via real kanban writes, then assert the
+    thread carries the expected kinds. Replaces the v1 attempt to have a
+    single LLM worker simulate three-province orchestration.
     """
-    print("\n" + "="*60)
-    print("C3: Comprehensive debate — 三省 × DCI kind tracking")
-    print("="*60)
-
-    card_id = kanban_create(
-        title="E2E-C3: Comprehensive debate — A2A protocol evolution",
-        assignee="regent",
-        skill=None,
-        body=(
-            "你作为监国太子，请主持一次完整的三省辩论，议题：'三省六部 A2A 协议下一步应优先支持哪种通信模式？'\n\n"
-            "辩论流程：\n"
-            "1. 先让翰林院(hanlinyuan)提出 PROPOSE（提案）\n"
-            "2. 让工部(gongbu)给出 EVIDENCE_FOR（举证支持）或 EVIDENCE_AGAINST（举证反对）\n"
-            "3. 让兵部(engineer)给出 CHALLENGE（挑战）\n"
-            "4. 你作为太子(SYNTHESIZE)综合各方意见\n"
-            "5. 最后由门下省(reviewer)给出 DECISION（裁决）\n\n"
-            "完成后，请在总结中列出所有出现的 DCI kind，并说明每种 kind 出现了几次。"
-        )
-    )
-    if not card_id:
+    print("\n" + "=" * 60)
+    print("C3: five-turn debate — thread integrity over a2a_comment_kinds")
+    print("=" * 60)
+    if not KANBAN_DB.exists():
+        print(f"  ❌ kanban.db missing at {KANBAN_DB}")
         return False
 
-    print(f"  📋 Card: {card_id}")
-    card = wait_for_completion(card_id, timeout=300)
-
-    if not card or card_status(card) != "done":
-        print(f"  ❌ Debate not completed")
+    conn = sqlite3.connect(str(KANBAN_DB))
+    conn.row_factory = sqlite3.Row
+    tid = kanban_create("E2E-C3-v2: A2A evolution debate anchor",
+                        assignee="default")
+    if not tid:
         return False
+    print(f"  📋 Anchor: {tid}")
 
-    summary = card.get("latest_summary", "")
-    comments = card.get("comments", [])
-    print(f"  💬 Comments: {len(comments)}")
-    print(f"  📝 Summary: {summary[:300]}")
+    # Five turns drawn from the production-shape script used by
+    # tests/e2e/test_dci_pipeline.py, but routed through the real
+    # `hermes kanban comment` write path so the bypass table is exercised
+    # through the bridge, not directly seeded.
+    script = [
+        ("[PROPOSE] 应当采用 webhook 即时唤醒，比轮询延迟低且省 token",
+         ck.CommentKind.PROPOSE),
+        ("根据 G²CP 论文 arxiv 2602.13370 的数据显示，结构化通信减少 73% token",
+         ck.CommentKind.EVIDENCE_FOR),
+        ("我质疑这一论点：webhook 需公网入口，内网穿透增加 SSRF 攻击面",
+         ck.CommentKind.CHALLENGE),
+        ("[SYNTHESIZE] 综合各方意见，先 mTLS 包裹的 webhook，再评估全量",
+         ck.CommentKind.SYNTHESIZE),
+        ("[CONCEDE] 接受 mTLS + 灰度方案",
+         ck.CommentKind.CONCEDE),
+    ]
 
-    # Check DCI kinds in a2a_comment_kinds
-    task_ids = [card_id]
-    kinds_map = get_task_kinds(task_ids)
-    kinds_found = set(kinds_map.values())
+    try:
+        for body, expected_kind in script:
+            cid = post_classify_record(conn, tid, body, expected_kind)
+            if cid is None:
+                print(f"      ❌ failed to record: {body[:50]}")
+                return False
 
-    print(f"  🏷️  DCI kinds in thread: {sorted(kinds_found) if kinds_found else 'none'}")
+        thread = ck.get_thread(conn, tid)
+        print(f"  💬 thread length: {len(thread)}")
 
-    has_enough_comments = len(comments) >= 4
-    has_dci_kinds = len(kinds_found) >= 3
-    summary_mentions_kinds = "kind" in summary.lower() or "PROPOSE" in summary or "CHALLENGE" in summary
+        kinds_found = sorted({e.kind for e in thread})
+        print(f"  🏷️  DCI kinds in thread: {kinds_found}")
 
-    if has_enough_comments and has_dci_kinds:
-        print(f"  ✅ PASS: Comprehensive debate with {len(kinds_found)} DCI kinds")
-        return True
-    elif has_enough_comments:
-        print(f"  ⚠️  Debate had enough comments but few DCI kinds recorded")
-        return True  # Partial pass
-    else:
-        print(f"  ⚠️  Debate incomplete — {len(comments)} comments, {len(kinds_found)} kinds")
+        required = {
+            ck.CommentKind.PROPOSE.value,
+            ck.CommentKind.EVIDENCE_FOR.value,
+            ck.CommentKind.CHALLENGE.value,
+            ck.CommentKind.SYNTHESIZE.value,
+        }
+        present_set = set(kinds_found)
+        missing = required - present_set
+
+        thread_ok = len(thread) == len(script)
+        kinds_ok = not missing and len(present_set) >= 4
+
+        if thread_ok and kinds_ok:
+            print(f"  ✅ PASS: 5-turn debate with {len(present_set)} kinds")
+            return True
+        print(f"  ❌ FAIL: thread_ok={thread_ok} kinds_ok={kinds_ok} "
+              f"missing={sorted(missing) if missing else 'none'}")
         return False
+    finally:
+        kanban_archive(tid)
+        conn.close()
 
+
+# ─── runner ──────────────────────────────────────────────────────
 
 def main():
-    results = {}
-
-    results["C1"] = test_c1_vote_tally()
-    results["C2"] = test_c2_deadlock_guard()
-    results["C3"] = test_c3_comprehensive_debate()
-
-    print("\n" + "="*60)
-    print("PHASE 1C RESULTS")
-    print("="*60)
+    results = {
+        "C1": test_c1_vote_tally(),
+        "C2": test_c2_deadlock_guard(),
+        "C3": test_c3_comprehensive_debate(),
+    }
+    print("\n" + "=" * 60)
+    print("PHASE 1C RESULTS (v2 — orchestrator over real kanban writes)")
+    print("=" * 60)
     for name, passed in results.items():
         print(f"  {name}: {'✅ PASS' if passed else '❌ FAIL'}")
-
     all_pass = all(results.values())
     print(f"\n  Overall: {'✅ ALL PASS' if all_pass else '❌ SOME FAILED'}")
     return 0 if all_pass else 1
