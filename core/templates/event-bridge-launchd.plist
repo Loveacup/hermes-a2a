@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hermes.eventbridge</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{PYTHON}}</string>
+        <string>-m</string>
+        <string>event_bridge.daemon</string>
+        <string>--interval</string>
+        <string>1.0</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>{{WORKING_DIR}}</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>{{HOME}}</string>
+        <key>HERMES_HOME</key>
+        <string>{{HERMES_HOME}}</string>
+        <key>OBSIDIAN_VAULT</key>
+        <string>{{OBSIDIAN_VAULT}}</string>
+        <key>PYTHONPATH</key>
+        <string>{{WORKING_DIR}}</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>{{LOG_DIR}}/eventbridge.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>{{LOG_DIR}}/eventbridge.err.log</string>
+</dict>
+</plist>
