@@ -145,7 +145,7 @@ def _classify(status: str, response: str, error: str = "") -> dict:
     return {"semantic_status": "succeeded", "completion_reason": "unknown"}
 
 
-def _resolve_skill_env(profile: str, task: dict) -> dict[str, str]:
+def _resolve_skill_env(profile: str, task: dict) -> tuple[dict[str, str], list]:
     """Build env dict that propagates per-task --skill names through to the worker.
 
     Contract (matches tdd-test-plan.md §2.5 / skill_resolver.to_env):
@@ -154,21 +154,23 @@ def _resolve_skill_env(profile: str, task: dict) -> dict[str, str]:
 
     A2A clients pass per-task skills as `task["skills"]` (list[str]) in the
     POST body. We merge with the profile's dept defaults via skill_resolver
-    and return env vars; callers add them to subprocess env.
+    and return (env_vars, resolved_skills).
+
+    Returns ({}, []) when resolution fails or no skills requested.
     """
     if resolve_skills is None or _skills_to_env is None:
-        return {}
+        return {}, []
     requested = task.get("skills") or []
     if not isinstance(requested, list):
-        return {}
+        return {}, []
     try:
         resolved = resolve_skills(profile=profile, per_task=requested)
-    except Exception as e:  # never block the task on resolver bugs
+    except Exception as e:
         logger.warning("[hermes-a2a] skill resolver failed for %s: %s", profile, e)
-        return {}
+        return {}, []
     if not resolved:
-        return {}
-    return _skills_to_env(resolved)
+        return {}, []
+    return _skills_to_env(resolved), resolved
 
 
 def handle_task(task: dict) -> dict:
@@ -275,6 +277,37 @@ def _hermes_bin() -> str:
     return "hermes"  # fallback — will fail with clear error
 
 
+def _ensure_m2cl_symlinks(resolved: list, profile: str) -> None:
+    """Symlink dept-other (M2CL cross-dept) skills into the worker's skills dir.
+
+    Hermes CLI --skills only searches the profile's own skills directory.
+    When the skill_resolver locates a skill via DEPT_OTHER (cross-dept loading),
+    we create a symlink so the hermes subprocess can find it.
+
+    Symlinks are idempotent and harmless if stale — they just point to the
+    real skill directory in jz-skills.
+    """
+    if not resolved:
+        return
+    hermes_home = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
+    skills_dir = Path(hermes_home) / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+
+    from skill_resolver import SkillSource
+    for sk in resolved:
+        if getattr(sk, 'source_layer', None) != SkillSource.DEPT_OTHER:
+            continue
+        target = skills_dir / sk.name
+        src = sk.path
+        if target.is_symlink() or target.exists():
+            continue  # already exists — skip
+        try:
+            target.symlink_to(src)
+            logger.info("[hermes-a2a] M2CL symlink: %s → %s", target, src)
+        except OSError as e:
+            logger.warning("[hermes-a2a] M2CL symlink failed for %s: %s", sk.name, e)
+
+
 def _via_subprocess(task: dict, tid: str, prompt: str, profile: str) -> dict:
     """Execute task via hermes chat subprocess (fallback mode)."""
     start = time.time()
@@ -292,11 +325,14 @@ def _via_subprocess(task: dict, tid: str, prompt: str, profile: str) -> dict:
                 if k not in env:
                     env[k] = v.strip().strip('"').strip("'")
     # P0-2: inject per-task skill env so the worker loads dept + per-task skills
-    skill_env = _resolve_skill_env(profile, task)
+    skill_env, resolved = _resolve_skill_env(profile, task)
     if skill_env:
         env.update(skill_env)
         # Also forward as --skills to hermes chat (CLI contract)
         cmd += ["--skills", skill_env["HERMES_TASK_SKILLS"]]
+        # P0-2 M2CL symlink: for dept-other skills, symlink into worker's skills dir
+        # so hermes CLI can find them (it only searches profile skills directory).
+        _ensure_m2cl_symlinks(resolved, profile)
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=env)
     output = r.stdout.strip() or r.stderr.strip()
     task["status"] = "completed" if r.returncode == 0 else "failed"
