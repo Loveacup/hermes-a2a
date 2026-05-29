@@ -1,8 +1,8 @@
 """A2A Task Handler — forward Tasks to Hermes agent loop.
 
-Two execution modes (auto-selected):
-1. API Server mode: POST /v1/runs on profile's API Server (for regent:8643, default:8642)
-2. Subprocess mode: fallback for profiles without API Servers (hermes chat -q --profile <name>)
+Execution strategy (T2 后):
+1. 所有 profile 默认走 API Server (端口由 port_resolver.api_server_port 公式决定)
+2. API Server 连接错误 → 透明 fallback 到 subprocess (hermes chat -q --profile <name>)
 
 Result-classification keyword bank is externalised (P1-13):
     Priority: env A2A_CLASSIFY_KEYWORDS (path) > <hermes_home>/a2a-classify-keywords.json
@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from identity import load_identity_prefix
+from port_resolver import api_server_port as _resolve_api_port
 
 try:
     from skill_resolver import resolve_skills, to_env as _skills_to_env
@@ -33,9 +34,13 @@ logger = logging.getLogger("hermes-a2a.task_handler")
 # Keeps the post-task hook predictable on a busy kanban.
 _BACKFILL_SWEEP_LIMIT = 100
 
-# Profile → API Server port (only profiles with running API Servers)
-_API_SERVER_PORTS = {"regent": 8643, "default": 8642}
+# Profile → API Server port 现由 port_resolver 公式动态决定（详见 _api_server_port）.
 _API_TIMEOUT = 300
+
+
+def _api_server_port(profile: str) -> int:
+    """Resolve API Server port for any profile via the canonical formula."""
+    return _resolve_api_port(profile)
 
 # ── Result classification ──────────────────────────────────────────────
 # Heuristic signals in the agent's final response text.
@@ -267,10 +272,9 @@ def handle_task(task: dict) -> dict:
         prompt = identity_prefix + prompt
 
     try:
-        if profile in _API_SERVER_PORTS:
-            result = _via_api_server(task, tid, prompt, profile)
-        else:
-            result = _via_subprocess(task, tid, prompt, profile)
+        # T2: 所有 profile 默认走 API Server；连接错误时 _via_api_server 内部
+        # 透明 fallback 到 _via_subprocess.
+        result = _via_api_server(task, tid, prompt, profile)
     except Exception as e:
         task["status"] = "failed"
         task["error"] = str(e)
@@ -283,7 +287,7 @@ def handle_task(task: dict) -> dict:
 
 def _via_api_server(task: dict, tid: str, prompt: str, profile: str) -> dict:
     """Execute task via Hermes /v1/runs API (thin adapter mode)."""
-    port = _API_SERVER_PORTS[profile]
+    port = _api_server_port(profile)
     start = time.time()
 
     # Create run

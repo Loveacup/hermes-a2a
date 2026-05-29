@@ -62,10 +62,25 @@ if [[ ${#A2A_PAIRS[@]} -eq 0 ]]; then
     )
 fi
 
-API_PAIRS=(
-    "default:8642"
-    "regent:8643"
-)
+# T2: 16-profile API Server 推广.
+# 端口公式：8400 + sha256("api:" + profile) % 100.
+# 来源优先级:
+#   1. port-map.md 内的 `- **API_<profile>** ... 端口 \`<port>\`` 行（含迁移说明）
+#   2. 兜底 default:8642 / regent:8643 (T2 前历史值)
+declare -a API_PAIRS
+if [[ -n "${PORT_MAP:-}" && -f "$PORT_MAP" ]]; then
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^-[[:space:]]+\*\*API_([a-z_]+)\*\*.*端口[[:space:]]+\`([0-9]+)\` ]]; then
+            API_PAIRS+=("${BASH_REMATCH[1]}:${BASH_REMATCH[2]}")
+        fi
+    done < "$PORT_MAP"
+fi
+if [[ ${#API_PAIRS[@]} -eq 0 ]]; then
+    API_PAIRS=(
+        "default:8642"
+        "regent:8643"
+    )
+fi
 
 check_endpoint() {
     local port=$1 label=$2 url=$3
