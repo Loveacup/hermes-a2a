@@ -7,7 +7,9 @@
 #   2. PORT_MAP=<path> env var
 #   3. ../../s6m-config/port-map.md (sibling to core/, default for the s6m monorepo layout)
 #   4. Built-in 6-profile fallback (engineer/shangshu/budget/regent/default/gongbu)
-set -euo pipefail
+set -uo pipefail
+# Note: -e intentionally omitted — doctor aggregates many independent checks;
+# one fail must not abort the rest. ALL_OK is the global verdict instead.
 
 JSON_MODE=false
 PORT_MAP=""
@@ -351,6 +353,80 @@ check_identity_prefix_profile_aware() {
     _record "identity_prefix_profile_aware" "pass" "identity flows HERMES_PROFILE → task_handler → identity.py"
 }
 
+# Check 9 — Kanban DB initialized with the 6 core tables.
+# Plan: tdd-test-plan.md §1.4 (P0-1 GREEN).
+check_kanban_initialized() {
+    local db="${HERMES_HOME:-$HOME/.hermes}/kanban.db"
+    if [[ ! -f "$db" ]]; then
+        _record "kanban_initialized" "fail" "kanban.db missing at $db (run: hermes kanban init)"
+        return 1
+    fi
+    if [[ ! -s "$db" ]]; then
+        _record "kanban_initialized" "fail" "kanban.db is 0 bytes — not initialized"
+        return 1
+    fi
+    if ! command -v sqlite3 >/dev/null 2>&1; then
+        _record "kanban_initialized" "fail" "sqlite3 not installed; cannot probe schema"
+        return 1
+    fi
+    local required="tasks task_links task_comments task_events task_runs kanban_notify_subs"
+    local missing=""
+    for t in $required; do
+        if ! sqlite3 "$db" "SELECT name FROM sqlite_master WHERE type='table' AND name='$t'" 2>/dev/null | grep -q "^$t$"; then
+            missing+="$t "
+        fi
+    done
+    if [[ -n "$missing" ]]; then
+        _record "kanban_initialized" "fail" "missing tables: $missing"
+        return 1
+    fi
+    local n_tasks
+    n_tasks=$(sqlite3 "$db" "SELECT COUNT(*) FROM tasks" 2>/dev/null || echo 0)
+    _record "kanban_initialized" "pass" "6 tables present, ${n_tasks} tasks"
+}
+
+# Check 10 — Dispatcher daemon alive.
+# v0.15.x deprecation note: standalone daemon requires --force; gateway
+# embeds a dispatcher too. We accept either signal.
+# Plan: tdd-test-plan.md §1.4 (P0-1 GREEN), tdd-plan-review.md §2.3.
+check_dispatcher_running() {
+    local pid_standalone="${HERMES_HOME:-$HOME/.hermes}/dispatcher.pid"
+    local pid_gateway="${HERMES_HOME:-$HOME/.hermes}/gateway.pid"
+    local standalone_pid="" gateway_pid="" reason=""
+
+    if [[ -f "$pid_standalone" ]]; then
+        standalone_pid=$(tr -d '[:space:]' < "$pid_standalone" || true)
+        if [[ -n "$standalone_pid" ]] && kill -0 "$standalone_pid" 2>/dev/null; then
+            reason="standalone daemon pid=$standalone_pid"
+        else
+            standalone_pid=""
+        fi
+    fi
+    if [[ -f "$pid_gateway" ]]; then
+        gateway_pid=$(tr -d '[:space:]' < "$pid_gateway" || true)
+        if [[ -n "$gateway_pid" ]] && kill -0 "$gateway_pid" 2>/dev/null; then
+            reason="${reason:+$reason; }gateway pid=$gateway_pid (embedded dispatcher)"
+        else
+            gateway_pid=""
+        fi
+    fi
+
+    # pgrep fallback if no pidfile (handles --force standalone without --pidfile)
+    if [[ -z "$standalone_pid" && -z "$gateway_pid" ]]; then
+        if pgrep -f "hermes kanban daemon" >/dev/null 2>&1; then
+            reason="hermes kanban daemon found via pgrep (no pidfile)"
+        elif pgrep -f "hermes.*gateway.*(run|start)" >/dev/null 2>&1; then
+            reason="hermes gateway running (embedded dispatcher)"
+        fi
+    fi
+
+    if [[ -z "$reason" ]]; then
+        _record "dispatcher_running" "fail" "no dispatcher: start with 'bash s6m-config/scripts/start-dispatcher.sh' or 'hermes gateway start'"
+        return 1
+    fi
+    _record "dispatcher_running" "pass" "$reason"
+}
+
 if $JSON_MODE; then
     echo ""
     echo "  ],"
@@ -368,6 +444,8 @@ check_core_deploy_drift
 check_provider_key_presence
 check_send_message_tool_in_a2a
 check_identity_prefix_profile_aware
+check_kanban_initialized
+check_dispatcher_running
 
 if $JSON_MODE; then
     # Join CHECK_JSON entries with commas (no `local` outside a function).

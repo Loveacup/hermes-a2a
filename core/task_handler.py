@@ -16,6 +16,12 @@ from pathlib import Path
 
 from identity import load_identity_prefix
 
+try:
+    from skill_resolver import resolve_skills, to_env as _skills_to_env
+except ImportError:  # resolver may be absent in pre-P0-2 deployments
+    resolve_skills = None
+    _skills_to_env = None
+
 logger = logging.getLogger("hermes-a2a.task_handler")
 
 # Profile → API Server port (only profiles with running API Servers)
@@ -139,6 +145,32 @@ def _classify(status: str, response: str, error: str = "") -> dict:
     return {"semantic_status": "succeeded", "completion_reason": "unknown"}
 
 
+def _resolve_skill_env(profile: str, task: dict) -> dict[str, str]:
+    """Build env dict that propagates per-task --skill names through to the worker.
+
+    Contract (matches tdd-test-plan.md §2.5 / skill_resolver.to_env):
+        HERMES_TASK_SKILLS         comma-separated effective skill names
+        HERMES_SKILL_SOURCE_LAYERS comma-separated <name>:<layer>[:<owner>]
+
+    A2A clients pass per-task skills as `task["skills"]` (list[str]) in the
+    POST body. We merge with the profile's dept defaults via skill_resolver
+    and return env vars; callers add them to subprocess env.
+    """
+    if resolve_skills is None or _skills_to_env is None:
+        return {}
+    requested = task.get("skills") or []
+    if not isinstance(requested, list):
+        return {}
+    try:
+        resolved = resolve_skills(profile=profile, per_task=requested)
+    except Exception as e:  # never block the task on resolver bugs
+        logger.warning("[hermes-a2a] skill resolver failed for %s: %s", profile, e)
+        return {}
+    if not resolved:
+        return {}
+    return _skills_to_env(resolved)
+
+
 def handle_task(task: dict) -> dict:
     tid = task.get("id", "unknown")
     msg = task.get("message") or task.get("input") or task.get("action") or {}
@@ -147,7 +179,7 @@ def handle_task(task: dict) -> dict:
         task["status"] = "failed"
         task["error"] = "Empty message"
         return task
-    
+
     profile = os.environ.get("HERMES_PROFILE", "")
     hermes_home = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
 
@@ -259,6 +291,12 @@ def _via_subprocess(task: dict, tid: str, prompt: str, profile: str) -> dict:
                 k, v = line.split("=", 1)
                 if k not in env:
                     env[k] = v.strip().strip('"').strip("'")
+    # P0-2: inject per-task skill env so the worker loads dept + per-task skills
+    skill_env = _resolve_skill_env(profile, task)
+    if skill_env:
+        env.update(skill_env)
+        # Also forward as --skills to hermes chat (CLI contract)
+        cmd += ["--skills", skill_env["HERMES_TASK_SKILLS"]]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=env)
     output = r.stdout.strip() or r.stderr.strip()
     task["status"] = "completed" if r.returncode == 0 else "failed"
