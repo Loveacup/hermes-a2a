@@ -135,7 +135,11 @@ def _open_log(profile: str, hermes_home: str):
 
 
 def register(ctx) -> None:
-    """Hermes plugin entry — spawn A2A HTTP server on profile-specific port."""
+    """Hermes plugin entry — spawn A2A HTTP server on profile-specific port.
+
+    P0-001: 若端口已有 listener（launchd 管理的 A2A server），跳过 spawn。
+    避免 plugin.py Popen 与 launchd KeepAlive 三方互杀导致进程风暴。
+    """
     global _server_proc, _log_handle
     if _server_proc and _server_proc.poll() is None:
         logger.warning("[hermes-a2a] already running pid=%s; skip spawn", _server_proc.pid)
@@ -143,6 +147,20 @@ def register(ctx) -> None:
 
     profile = _resolve_profile()
     host = "127.0.0.1"
+
+    # ── P0-001: detect launchd-managed A2A server ──────────────────
+    # If the intended port already has a TCP listener, assume launchd
+    # (or another supervisor) owns the A2A server for this profile.
+    # Spawning a second instance would trigger mutual kill with launchd
+    # KeepAlive → process storm (observed: loadavg 28.91, 40+ zombies).
+    env_port = os.environ.get("A2A_PORT", "").strip()
+    intended = int(env_port) if env_port else _stable_port(profile)
+    if not _port_free(host, intended):
+        logger.info(
+            "[hermes-a2a] port %d already in use for profile=%s; "
+            "assuming launchd-managed, skip spawn", intended, profile,
+        )
+        return
 
     # BUG-006: kill any prior server.py owned by this profile before we try
     # to grab a port. Without this, gateway restarts leak server.py processes
