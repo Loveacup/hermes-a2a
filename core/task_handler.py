@@ -480,7 +480,7 @@ def _via_subprocess(task: dict, tid: str, prompt: str, profile: str) -> dict:
         # P0-2 M2CL symlink: for dept-other skills, symlink into worker's skills dir
         # so hermes CLI can find them (it only searches profile skills directory).
         _ensure_m2cl_symlinks(resolved, profile)
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=env)
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=480, env=env)
     output = r.stdout.strip() or r.stderr.strip()
     task["status"] = "completed" if r.returncode == 0 else "failed"
     cls = _classify(task["status"], output, task.get("error", ""))

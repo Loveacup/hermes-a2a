@@ -19,7 +19,7 @@ A2A_TOKEN = Path("/Users/alexcai/.hermes/.a2a-token").read_text().strip()
 HERMES_ROOT = Path(os.path.expanduser("~/.hermes"))
 REGISTRY_PY = HERMES_ROOT / "plugins/hermes-a2a/registry.py"
 KANBAN_CLI = "hermes kanban"
-A2A_TIMEOUT = 300  # 单任务超时 5min
+A2A_TIMEOUT = 480  # 单任务超时 8min（>= 生产 subprocess timeout 480s + buffer）
 CHAIN_TIMEOUT = 1500  # 总链超时 25min
 TG_GROUP = "-5133970461"
 
@@ -108,6 +108,11 @@ def test_s2_code_review_chain():
     task_ids = []
     results = {}
     chain_outputs = {}
+
+    baseline_proc_count = int(subprocess.run(
+        "ps aux | grep -E 'server\\.py|gateway\\.py' | grep -v grep | grep -v venv | wc -l",
+        shell=True, capture_output=True, text=True, timeout=5
+    ).stdout.strip() or 0)
 
     # Phase 1: Planner → Reviewer
     print("=" * 60)
@@ -252,10 +257,13 @@ def test_s2_code_review_chain():
 
     checks = {}
 
-    # 1. 六部全触发
-    triggered = [p for p in ["planner", "reviewer", "shangshu", "engineer", "tester"] 
-                 if p in results and results[p].get("status") == "completed"]
-    checks["六部全触发"] = len(triggered) >= 5
+    # 1. 六部全触发 (reviewer 在 results 中存为 reviewer_1/reviewer_2，需按角色名归并)
+    triggered_roles = {
+        k.split("_")[0] for k, v in results.items()
+        if v.get("status") == "completed"
+    }
+    required_roles = {"planner", "reviewer", "shangshu", "engineer", "tester"}
+    checks["六部全触发"] = required_roles.issubset(triggered_roles)
 
     # 2. 门下调拨（reviewer_1 应封驳）
     r1_resp = chain_outputs.get("reviewer_1", "")
@@ -274,9 +282,9 @@ def test_s2_code_review_chain():
     # 5. 六部产出
     checks["六部产出"] = bool(engineer_output) and bool(tester_output) and bool(final)
 
-    # 6. 史馆归档（检查 Obsidian 是否有新文件）
-    obsidian_inbox = Path(os.path.expanduser("~/Documents/Obsidian/AlexCai/00-Inbox/"))
-    recent_files = sorted(obsidian_inbox.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)[:5]
+    # 6. 史馆归档（event_bridge daemon 写入 88_event-bridge/YYYY/MM/DD/<id>.md）
+    bridge_root = Path(os.path.expanduser("~/Documents/Obsidian/AlexCai/88_event-bridge/"))
+    recent_files = sorted(bridge_root.rglob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)[:10]
     checks["史馆归档"] = len(recent_files) > 0 and any(
         time.time() - f.stat().st_mtime < elapsed + 120 for f in recent_files
     )
@@ -289,12 +297,12 @@ def test_s2_code_review_chain():
     # 8. 总耗时 ≤25min
     checks["总耗时≤25min"] = elapsed <= 1500
 
-    # 9. 无僵尸进程
-    zombie_check = subprocess.run(
+    # 9. 无僵尸进程 (launchd 常驻 server.py/gateway.py 不算僵尸；比对 baseline 看测试是否新增孤儿)
+    current_count = int(subprocess.run(
         "ps aux | grep -E 'server\\.py|gateway\\.py' | grep -v grep | grep -v venv | wc -l",
         shell=True, capture_output=True, text=True, timeout=5
-    )
-    checks["无僵尸进程"] = int(zombie_check.stdout.strip() or 0) == 0
+    ).stdout.strip() or 0)
+    checks["无僵尸进程"] = current_count <= baseline_proc_count
 
     # 10. Kanban 完整
     kanban_result = kanban("list", "--json")
