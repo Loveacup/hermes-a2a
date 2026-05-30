@@ -164,3 +164,5 @@ hermes-a2a/（源码 ~/code/hermes-a2a/）
 - 2026-05-30: Step 2 部署完成 — 16/16 v0.2.0 全部运行, P0 registry plist 修复, MCP 瘦身, commit `d075d4a`。
 - 2026-05-30: 环境清理 — 部署同步（rsync 31 文件 core/ → 部署），Kanban 残留任务 blocked，跟踪文档全量更新。
 - 2026-05-30: 3S6M 插件前置调研 — Hermes 插件系统能力验明：ctx.register_skill() 支持 plugin: 命名空间（优于 §12 设计），A2A 进程管理仍需 launchd。设计搁置，待父皇召唤。
+- 2026-05-30: Kanban 损坏根因修复 — 定位为 Legacy TEXT-PK schema drift（commit `c70dca3a8`），git pull 144 commits + Gateway 重启后 `_rebuild_drifted_tables` 自动修复。integrity_check=ok，清理 36MB corrupt backups。详见 [[hermes-a2a_Kanban损坏根因调查_20260530]]。
+- 2026-05-30: Supermemory 双池修复 — 定位为 `_sanitize_tag` 正则吃连字符 bug，创建 `~/.hermes/supermemory.json`，Event Bridge daemon 重启零 timeout。5 篇旧文档待 Dashboard re-tag。详见 [[hermes-a2a_Supermemory双池审计_20260530]]。
