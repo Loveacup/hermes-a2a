@@ -222,8 +222,18 @@ class A2AHandler(BaseHTTPRequestHandler):
             body = self._read_body()
             if body is None:
                 return
-            # Server-generated id always wins; never trust client to set it.
-            tid = f"a2a-{uuid.uuid4().hex}"  # full 32-char hex (P0-10)
+            # Honor client-provided id for idempotency (A2A protocol convention),
+            # but sanitize aggressively and reject collisions to preserve P0-10
+            # collision-resistance guarantees against guessable-id attacks.
+            client_id = body.get("id")
+            if isinstance(client_id, str) and _is_safe_task_id(client_id):
+                if _store.get(client_id) is not None:
+                    return self._send_json(
+                        {"error": "task id already exists", "id": client_id}, 409
+                    )
+                tid = client_id
+            else:
+                tid = f"a2a-{uuid.uuid4().hex}"  # full 32-char hex (P0-10)
             # Normalise payload key: accept message / input / action / prompt / task
             raw_msg = body.get("message") or body.get("input") or body.get("action") or body.get("prompt") or body.get("task")
             task = {
@@ -258,6 +268,14 @@ class A2AHandler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args) -> None:
         logger.debug("%s - %s", self.client_address[0], fmt % args)
+
+
+_SAFE_TASK_ID_RE = __import__("re").compile(r"^[A-Za-z0-9_\-]{4,128}$")
+
+
+def _is_safe_task_id(value: str) -> bool:
+    """Validate a client-provided task id: ascii, no path/control chars, bounded length."""
+    return bool(_SAFE_TASK_ID_RE.match(value))
 
 
 def _resolve_timeout(message) -> int:
