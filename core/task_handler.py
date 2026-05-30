@@ -37,10 +37,57 @@ _BACKFILL_SWEEP_LIMIT = 100
 # Profile → API Server port 现由 port_resolver 公式动态决定（详见 _api_server_port）.
 _API_TIMEOUT = 300
 
+_API_SERVER_KEY_CACHE: str | None = None  # populated on first use; "" if absent
+
 
 def _api_server_port(profile: str) -> int:
     """Resolve API Server port for any profile via the canonical formula."""
     return _resolve_api_port(profile)
+
+
+def _api_server_key() -> str:
+    """Resolve the API Server Bearer token.
+
+    Priority:
+        1. env API_SERVER_KEY (set by parent process)
+        2. <HERMES_HOME>/.env  (profile-local .env)
+        3. ~/.hermes/.env      (global Hermes env)
+
+    Returns "" when no key is configured (caller should then skip the header,
+    matching the API server's `not self._api_key` no-auth branch).
+    """
+    global _API_SERVER_KEY_CACHE
+    if _API_SERVER_KEY_CACHE is not None:
+        return _API_SERVER_KEY_CACHE
+
+    key = os.environ.get("API_SERVER_KEY", "").strip()
+    if not key:
+        candidates: list[Path] = []
+        hermes_home = os.environ.get("HERMES_HOME")
+        if hermes_home:
+            candidates.append(Path(hermes_home) / ".env")
+        # Profile envs live under ~/.hermes/profiles/<profile>/.env; the
+        # canonical global key file is ~/.hermes/.env (one level up).
+        candidates.append(Path(os.path.expanduser("~/.hermes/.env")))
+        for env_path in candidates:
+            if not env_path.is_file():
+                continue
+            try:
+                for line in env_path.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    if k.strip() == "API_SERVER_KEY":
+                        key = v.strip().strip('"').strip("'")
+                        if key:
+                            break
+            except OSError:
+                continue
+            if key:
+                break
+    _API_SERVER_KEY_CACHE = key
+    return key
 
 # ── Result classification ──────────────────────────────────────────────
 # Heuristic signals in the agent's final response text.
@@ -202,8 +249,16 @@ def _ensure_comment_kind_backfill(task_id: str | None = None) -> dict | None:
     """
     if _comment_kind_backfill is None:
         return None
+    # Kanban is a cross-profile primitive: comments written via `kanban_comment`
+    # always land in the canonical ~/.hermes/kanban.db. A2A workers run with
+    # HERMES_HOME pointing at their per-profile scratch dir
+    # (~/.hermes/profiles/<profile>) where no kanban.db lives. Prefer the
+    # profile path when it exists (backward compat / per-profile deploys);
+    # otherwise fall back to the global file the CLI uses.
     home = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
     db_path = Path(home) / "kanban.db"
+    if not db_path.is_file():
+        db_path = Path(os.path.expanduser("~/.hermes/kanban.db"))
     if not db_path.is_file():
         return None
     try:
@@ -292,10 +347,14 @@ def _via_api_server(task: dict, tid: str, prompt: str, profile: str) -> dict:
 
     # Create run
     body = json.dumps({"input": prompt, "model": "hermes-agent"}).encode()
+    headers = {"Content-Type": "application/json"}
+    api_key = _api_server_key()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/v1/runs",
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:
@@ -308,12 +367,16 @@ def _via_api_server(task: dict, tid: str, prompt: str, profile: str) -> dict:
 
     # Poll for completion
     deadline = start + _API_TIMEOUT
+    poll_headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     while time.time() < deadline:
         time.sleep(1)
         try:
-            resp = urllib.request.urlopen(
-                f"http://127.0.0.1:{port}/v1/runs/{run_id}", timeout=5
+            poll_req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/v1/runs/{run_id}",
+                headers=poll_headers,
+                method="GET",
             )
+            resp = urllib.request.urlopen(poll_req, timeout=5)
             run = json.loads(resp.read())
             status = run.get("status", "")
             if status in ("completed", "failed", "cancelled"):
