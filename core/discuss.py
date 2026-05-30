@@ -53,8 +53,8 @@ A2A_POLL_INTERVAL = 2
 A2A_DEFAULT_TIMEOUT = 300
 TG_SEND_TIMEOUT = 15
 
-HERMES_BIN = os.path.expanduser("~/.hermes/hermes-agent/venv/bin/hermes")
-LOG_DIR = Path(os.path.expanduser("~/.hermes/logs"))
+HERMES_BIN = os.path.join(os.environ.get("HOME", os.path.expanduser("~")), ".hermes/hermes-agent/venv/bin/hermes")
+LOG_DIR = Path(os.path.join(os.environ.get("HOME", os.path.expanduser("~")), ".hermes/logs"))
 LOG_PATH = LOG_DIR / "discuss.log"
 
 
