@@ -1,7 +1,8 @@
 ---
 project: hermes-a2a
-status: Step 5 — 16/16 矩阵全绿，P0 E2E 收官
+status: v0.2.0 稳定 — 16/16 全绿，T2.5b Gateway 加固完成
 created: 2026-05-27
+modified: 2026-05-30
 repo: https://github.com/finalhour/hermes-a2a
 ---
 
@@ -9,46 +10,62 @@ repo: https://github.com/finalhour/hermes-a2a
 
 ## 概述
 
-基于 Google A2A Protocol (agent-to-agent, 23.4K⭐) 的 Hermes 全局插件。为三省六部 15 个 profile 提供标准化的跨部门通信能力——能力发现、任务委派、进度流式传输。
+基于 Google A2A Protocol (agent-to-agent, 23.4K⭐) 的 Hermes 全局插件。为三省六部 16 个 profile 提供标准化的跨部门通信能力——能力发现、任务委派、进度流式传输。
 
 ## 动机
 
 当前三省六部 profile 间通信仅靠 Kanban 卡（异步投递 + 60s 轮询），无法做同步 on-demand 查询。内阁 API 桥接（default↔regent 的 localhost HTTP）已验证同步通信模式的可行性。hermes-a2a 将此模式标准化、规模化。
 
+## 当前状态：v0.2.0 生产稳定
+
+- **A2A 端口**：16/16 全部返回 200，每 profile 13 skills 可用
+- **Gateway**：regent(8417) + default(8460) + cron-worker(8461) 全部监管运行
+- **执行模式**：全 16 profile 走 api_server 模式（task_handler 已去白名单）
+- **进程管理**：A2A server 在 gateway 内嵌运行（非独立 launchd），端口冲突自动 skip
+- **Kanban**：4 done + 2 blocked（E2E 测试残留），dispatcher 内嵌 gateway
+- **E2E**：6/6 文件全部通过（含 DCI pipeline、辩论、16-profile 矩阵）
+
+### 16 Profile 部署清单
+
+端口公式 A2A：`8650 + sha256(profile) % 300`（零碰撞）
+端口公式 API：`8400 + sha256("api:"+profile) % 100`（salted，零碰撞）
+
+| Profile | 角色 | A2A | API | Skills |
+|---------|------|:---:|:---:|:------:|
+| jiangzuojian | 将作监/校验 | 8654 | 8425 | 5 |
+| auditor | 御史台/复审 | 8698 | 8468 | 3 |
+| hanlinyuan | 翰林院/知识 | 8702 | 8466 | 6 |
+| dispatcher | 派工调度 | 8707 | 8465 | 4 |
+| engineer | 兵部/工程 | 8718 | 8482 | 5 |
+| planner | 策划 | 8728 | 8474 | 2 |
+| tester | 测试 | 8755 | 8480 | 4 |
+| reviewer | 御史 | 8761 | 8493 | 2 |
+| archivist | 史馆/归档 | 8804 | 8431 | 2 |
+| shangshu | 尚书/协调 | 8826 | 8492 | 4 |
+| protocol | 礼部/协议 | 8833 | 8443 | 3 |
+| gongbu | 工部/基建 | 8898 | 8458 | 4 |
+| registry | 吏部/注册 | 8928 | 8438 | 3 |
+| budget | 户部/成本 | 8936 | 8445 | 3 |
+| regent | 太子/监国 | 8939 | 8417 | 13 |
+| default | 小黄/秘书 | 8945 | 8460 | 13 |
+
+> **注**：API Server 端口仅 regent(8417) + default(8460) 实际启用；其余 profile 无 API Server 需求（只做 A2A/Kanban worker），端口已分配待按需启用。
+
 ## 架构
 
 ```
 ┌──────────────────────────────────────────────────┐
-│                  hermes-a2a                        │
+│                  hermes-a2a v0.2.0                 │
 │                                                    │
 │  Agent Card ──→ 能力清单（自动从 config 生成）      │
 │  Task       ──→ 工作单元（id + status + artifact）  │
 │  Stream     ──→ SSE 流式进度                        │
+│  Discuss    ──→ ROLEPLAY + SYNTHESIZE 讨论编排     │
+│  EmpireThread ──→ pre_tool_call → Obsidian + Supermemory │
 │                                                    │
 │  Transport: HTTP/JSON (future: JSON-RPC 2.0)       │
 └──────────────────────────────────────────────────┘
 ```
-
-## 部署计划
-
-### 当前状态：6-profile launchd 监管（已生产就绪）
-
-| Profile | 端口 | 技能数 | 执行模式 |
-|---------|------|--------|----------|
-| engineer | 8668 | 5 | subprocess |
-| shangshu | 8676 | 4 | subprocess |
-| budget | 8686 | 3 | subprocess |
-| regent | 8689 | 13 | API Server /v1/runs |
-| default | 8695 | 13 | API Server /v1/runs |
-| gongbu | 8698 | 4 | subprocess |
-
-端口公式：`sha256(profile) % 300 + 8650`（16 profile 零碰撞验证通过）。全部由 launchd KeepAlive 监管，ThrottleInterval=30s。
-
-### Step 1: 核心 4 profile（已完成 2026-05-27）
-
-### Step 2: 全量部署（10+ profile，端口公式化）
-
-### Step 3: EmpireThread 事件桥（MEMORY_QUERY → Supermemory 跨部门只读，ADR-005 单层架构）
 
 ## 端点
 
@@ -64,34 +81,67 @@ repo: https://github.com/finalhour/hermes-a2a
 
 ```
 hermes-a2a/（源码 ~/code/hermes-a2a/）
-├── plugin.py              # Hermes 插件加载器
-├── server.py              # A2A HTTP Server
-├── agent_card.py          # Agent Card 自动生成
-├── task_handler.py        # Task → Hermes agent（双模执行）
-├── plugin.yaml            # 插件元数据
-├── requirements.txt       # pyyaml
+├── core/                        # 通用 A2A 内核（不绑三省六部）
+│   ├── plugin.py                # Hermes 插件入口 (register)
+│   ├── server.py                # A2A HTTP Server
+│   ├── agent_card.py            # Agent Card 自动生成
+│   ├── task_handler.py          # 双模执行（API Server / subprocess）
+│   ├── auth.py                  # Bearer token 认证
+│   ├── registry.py              # 端口注册表 + CLI
+│   ├── paths.py                 # HOME 劫持穿透
+│   ├── identity.py              # Profile 身份注入
+│   ├── port_resolver.py         # 端口公式计算
+│   ├── rate_limiter.py          # 速率限制
+│   ├── storage.py               # 任务存储
+│   ├── discuss.py               # 讨论编排引擎
+│   ├── auto_discuss.py          # 自动讨论触发
+│   ├── a2a_dispatch.py          # Profile 推荐打分
+│   ├── swarm_wrapper.py         # Kanban swarm 封装
+│   ├── skill_resolver.py        # M2CL 4 层 skill 加载
+│   ├── skill_sanitizer.py       # Unknown skill 拦截
+│   ├── comment_kind.py          # DCI 14 kind 枚举
+│   ├── comment_kind_backfill.py # 历史评论分类回填
+│   ├── comment_kind_classifier.py # LLM 分类器
+│   ├── orchestrator_router.py   # ROUTE_BY_KIND + VoteTally + deadlock
+│   ├── audit_hook.py            # 外科切除后保留 score+alert
+│   ├── empire_emit.py           # EmpireThread emit 入口
+│   ├── gateway.py               # Gateway 进程管理
+│   ├── plugin.yaml              # 插件元数据
+│   ├── requirements.txt         # pyyaml
+│   ├── event_bridge/            # 事件桥子系统
+│   │   ├── core.py / daemon.py / dlq.py / cursor.py
+│   │   └── sinks/{obsidian,supermemory}.py
+│   ├── scripts/
+│   │   ├── hermes-a2a-doctor.sh
+│   │   └── seed-a2a-symlinks.sh
+│   └── templates/
+│       ├── a2a-launchd.plist
+│       ├── api-server-launchd.plist
+│       └── event-bridge-launchd.plist
+│
+├── s6m-config/                  # 三省六部专属配置
+│   ├── port-map.md              # 16 profile 端口快查
+│   ├── discuss-modes.yaml       # 讨论模式配置
+│   └── docs/
+│       ├── tracking.md          # 本文件
+│       ├── methodology.md       # ADR-001~006
+│       ├── tdd-test-plan.md     # TDD 测试计划
+│       ├── tdd-plan-review.md   # TDD 审查报告
+│       └── design/              # 设计方案
 ├── scripts/
-│   ├── hermes-a2a-doctor.sh   # 健康聚合器
-│   └── seed-a2a-symlinks.sh   # per-profile symlink 种子
-├── docs/
-│   ├── tracking.md            # 项目追踪
-│   ├── methodology.md         # 方法论文档 + ADR
-│   ├── architecture-comparison.md  # A2A vs API Bridge 对比
-│   ├── deployment-report.md       # 部署接入报告
-│   └── audits/
-│       ├── 01-initial-audit.md        # 首轮审计（CC agent team）
-│       ├── 02-reaudit.md              # 二轮审计（3-agent team）
-│       └── 02-reaudit-ops-agent.md    # Ops agent 详细报告
-├── CLAUDE.md             # AI 协作文档
-└── README.md             # 用户文档
+│   └── gateway-wrapper.sh       # preflight + killpg 拦截
+├── tests/                       # E2E + 单元测试
+├── CLAUDE.md
+└── README.md
 ```
 
 ## 关联
 
 - A2A Protocol: https://github.com/a2aproject/A2A
 - 三省六部宪章: `three-provinces-constitution` skill
-- EmpireThread P4: capability_snapshot + heartbeat + MEMORY_QUERY
-- 内阁 API 桥接: default↔regent localhost HTTP
+- EmpireThread: Obsidian + Supermemory 双 Sink
+- Kanban: Hermes 原生 kanban_db，dispatcher 内嵌 gateway
+- 3S6M Plugin: 设计文档已就绪（Ob §12），待构建（2026-05-30 前置调研完成）
 
 ## 日志
 
@@ -102,11 +152,15 @@ hermes-a2a/（源码 ~/code/hermes-a2a/）
 - 2026-05-27: 二轮 CC 3-agent team 审计 — 确认 P0-2/P0-3 已修, 发现 NEW-P0-A（源码未同步）+ NEW-P0-B（PORT_RANGE=200 仍有碰撞）。
 - 2026-05-27: NEW-P0-A/B 修复 — PORT_RANGE 200→300（零碰撞）, 源码 ↔ 部署 ↔ GitHub 三同步, commit `d4b73a4`。v0.1.1 生产就绪。
 - 2026-05-28: Monorepo 拆分 — core/（通用内核）+ s6m-config/（三省六部配置）, commit `6a4ce85`。
-- 2026-05-28: Obsidian 全量同步 — 11 份文档入 vault（Inbox 3 + 审计 5 + 方案 3）。
-- 2026-05-28: 结果语义升级 — task_handler 增加 `semantic_status`（succeeded/degraded/failed）+ `completion_reason` + `fallback_text`。修复 A2A 任务 blind-complete + 无回退问题。
-- 2026-05-28: 信号覆盖补丁 — 中文口语化表达（已发到/已发至/已发出）纳入分类器。commit `2a19515`。
-- 2026-05-28: 讨论模式 — core/discuss.py 支持两种模式：ROLEPLAY（多轮角色扮演，双方各自发 TG 内阁群）和 SYNTHESIZE（default 深度分析 → regent 综合研判）。s6m-config/discuss-modes.yaml 配置。
-- 2026-05-30: EventBridge sink Hindsight → Supermemory 替换（ADR-005, 决策依据 ARCH-TEST-001）。删除 `core/event_bridge/sinks/hindsight.py`（-196 行）与 `test_event_bridge_hindsight.py`（-10 用例），新建 `sinks/supermemory.py`（urllib 直发 `POST https://api.supermemory.ai/v3/documents`，camelCase payload）与 `test_event_bridge_supermemory.py`（+9 用例 S1-S9）。daemon 条件改 `SUPERMEMORY_API_KEY`，launchd plist wrap zsh 源 `~/.hermes/.env`。container_tag 映射：regent → `hermes-cabinet`，default/其他 → fallback `hermes`。当前共 52 个 event_bridge 测试全绿；部署同步完成，已观测到 `dispatch: {'obsidian/regent': 1, 'supermemory/regent': 1}`。文档全面同步：methodology / EmpireThread v2 缩窄版 / 综合设计文档 v1.0 / 路线图 / step4 调查报告 / s6m-a2a-optimization。
-- 2026-05-30: E2E 全绿收尾（commit `9b59c4f`）。CC 完成 A/B/C 三阶段 E2E 重写：A3 新增 `core/skill_sanitizer.py` 防 worker crash-loop（82s 通过，原 timeout 180s）；B 测试从 task assignee 重写为 comment 级 DCI 闭合验证（6/6）；C 测试从单 worker 自然语言调度重写为真 kanban comments + classify + verify（C1+C2+C3 全过）。修复 shebang Python 3.12→3.11（pyexpat ABI）、kanban.db REINDEX、a2a_comment_kinds migration。全 6 个 E2E 文件全部通过。Obsidian 文档已同步更新。
-- 2026-05-30: P0 E2E 真 LLM 矩阵 + 辩论（commit `afa7368`）。修复 `task_handler.py` API_SERVER_KEY Bearer 注入，16/16 全走 api_server 模式。新增 `test_p0_matrix_16_profile.py`（222行）和 `test_p0_debate_e2e.py`（429行）。辩论 E2E 分类器 3/3 + 路由 3/3 全绿。修复 7 profile 模型配置（model:null→结构化），矩阵 16/16 全绿。
-- 2026-05-30: T2.5b Gateway 系统稳定性加固（commit 待提交）。新增 `scripts/gateway-wrapper.sh`（176行）：preflight 六项检查（venv python / HERMES_HOME / config.yaml / kanban.db 完整性 / .env / 过期 PID）+ killpg SIGTERM 拦截（pkill -P 清理子进程树 → 25s 优雅等待 → SIGKILL 兜底）。修复 cron-worker API 端口从 8460 改为 8461（与默认 gateway 分离）。创建 3 个 core gateway launchd plist：`com.hermes.gateway.regent`（8417）/ `com.hermes.gateway.cron-worker`（8461）/ `com.hermes.gateway.default`（8460），全部通过 gateway-wrapper.sh 接入 preflight + killpg。滚动接管完成：cron-worker → default → regent 依次 bootstrap，全部 KeepAlive 监管。
+- 2026-05-28: Obsidian 全量同步 — 11 份文档入 vault。
+- 2026-05-28: 结果语义升级 — task_handler 增加语义状态 + 回退机制。
+- 2026-05-28: 讨论模式 — core/discuss.py（ROLEPLAY + SYNTHESIZE）, commit `dabddec`。
+- 2026-05-30: EmpireThread + API Server 季度收官 — EventBridge Supermemory 替换 Hindsight（ADR-005, 52 测试全绿），API Server 16-profile 公式化（commit `9c33e55`, 146/146 回归）。详见 [[EmpireThread_v2_API_Server_实施总结_20260530]]。
+- 2026-05-30: P0 三项 TDD 全绿 — P0-1 Kanban init（12 tests）、P0-2 M2CL skill resolver（14 tests）、P0-3 DCI 旁路表（13 tests），commit `9b59c4f`。详见 [[三省六部A2A_TDD实施总结_20260529]]。
+- 2026-05-30: E2E 全绿收尾 — 6/6 E2E 文件全部通过（A3 skill_sanitizer + B DCI 闭合 + C 真 kanban 验证），commit `9b59c4f`。
+- 2026-05-30: P0 E2E 真 LLM 矩阵 + 辩论 — 16/16 api_server 模式全绿，辩论分类器+路由 6/6 全绿，commit `afa7368` + `a9957cf`。
+- 2026-05-30: T2.5b Gateway 稳定性加固 — gateway-wrapper.sh（preflight + killpg），3 core gateway launchd 监管，cron-worker 端口分离，commit `bf06a35`。
+- 2026-05-30: EmpireThread 事件桥实施 — P0-1 emit hook 全链路闭环（pre_tool_call → JSONL → daemon → Obsidian + Supermemory），commit `13e7d2c`。
+- 2026-05-30: Step 2 部署完成 — 16/16 v0.2.0 全部运行, P0 registry plist 修复, MCP 瘦身, commit `d075d4a`。
+- 2026-05-30: 环境清理 — 部署同步（rsync 31 文件 core/ → 部署），Kanban 残留任务 blocked，跟踪文档全量更新。
+- 2026-05-30: 3S6M 插件前置调研 — Hermes 插件系统能力验明：ctx.register_skill() 支持 plugin: 命名空间（优于 §12 设计），A2A 进程管理仍需 launchd。设计搁置，待父皇召唤。
