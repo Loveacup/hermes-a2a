@@ -224,8 +224,8 @@ class A2AHandler(BaseHTTPRequestHandler):
                 return
             # Server-generated id always wins; never trust client to set it.
             tid = f"a2a-{uuid.uuid4().hex}"  # full 32-char hex (P0-10)
-            # Normalise payload key: accept message / input / action / prompt
-            raw_msg = body.get("message") or body.get("input") or body.get("action") or body.get("prompt")
+            # Normalise payload key: accept message / input / action / prompt / task
+            raw_msg = body.get("message") or body.get("input") or body.get("action") or body.get("prompt") or body.get("task")
             task = {
                 "id": tid,
                 "status": "working",
