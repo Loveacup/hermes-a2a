@@ -180,7 +180,7 @@ def test_s2_code_review_chain():
     results["shangshu"] = r
     task_ids.append(tid)
     print(f"  shangshu → {r.get('status')}")
-    chain_outputs["shangshu"] = r.get("artifact", {}).get("response", "")[:200]
+    chain_outputs["shangshu"] = r.get("artifact", {}).get("response", "")[:500]
 
     # Step 4: Engineer 审查代码
     print("\n[4/6] Engineer 审查代码...")
