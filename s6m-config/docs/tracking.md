@@ -1,6 +1,6 @@
 ---
 project: hermes-a2a
-status: Step 4 — E2E 全绿，§12 3S6M Plugin 待启动
+status: Step 5 — 16/16 矩阵全绿，P0 E2E 收官
 created: 2026-05-27
 repo: https://github.com/finalhour/hermes-a2a
 ---
@@ -108,3 +108,4 @@ hermes-a2a/（源码 ~/code/hermes-a2a/）
 - 2026-05-28: 讨论模式 — core/discuss.py 支持两种模式：ROLEPLAY（多轮角色扮演，双方各自发 TG 内阁群）和 SYNTHESIZE（default 深度分析 → regent 综合研判）。s6m-config/discuss-modes.yaml 配置。
 - 2026-05-30: EventBridge sink Hindsight → Supermemory 替换（ADR-005, 决策依据 ARCH-TEST-001）。删除 `core/event_bridge/sinks/hindsight.py`（-196 行）与 `test_event_bridge_hindsight.py`（-10 用例），新建 `sinks/supermemory.py`（urllib 直发 `POST https://api.supermemory.ai/v3/documents`，camelCase payload）与 `test_event_bridge_supermemory.py`（+9 用例 S1-S9）。daemon 条件改 `SUPERMEMORY_API_KEY`，launchd plist wrap zsh 源 `~/.hermes/.env`。container_tag 映射：regent → `hermes-cabinet`，default/其他 → fallback `hermes`。当前共 52 个 event_bridge 测试全绿；部署同步完成，已观测到 `dispatch: {'obsidian/regent': 1, 'supermemory/regent': 1}`。文档全面同步：methodology / EmpireThread v2 缩窄版 / 综合设计文档 v1.0 / 路线图 / step4 调查报告 / s6m-a2a-optimization。
 - 2026-05-30: E2E 全绿收尾（commit `9b59c4f`）。CC 完成 A/B/C 三阶段 E2E 重写：A3 新增 `core/skill_sanitizer.py` 防 worker crash-loop（82s 通过，原 timeout 180s）；B 测试从 task assignee 重写为 comment 级 DCI 闭合验证（6/6）；C 测试从单 worker 自然语言调度重写为真 kanban comments + classify + verify（C1+C2+C3 全过）。修复 shebang Python 3.12→3.11（pyexpat ABI）、kanban.db REINDEX、a2a_comment_kinds migration。全 6 个 E2E 文件全部通过。Obsidian 文档已同步更新。
+- 2026-05-30: P0 E2E 真 LLM 矩阵 + 辩论（commit `afa7368`）。修复 `task_handler.py` API_SERVER_KEY Bearer 注入，16/16 全走 api_server 模式。新增 `test_p0_matrix_16_profile.py`（222行）和 `test_p0_debate_e2e.py`（429行）。辩论 E2E 分类器 3/3 + 路由 3/3 全绿。修复 7 profile 模型配置（model:null→结构化），矩阵 16/16 全绿。
