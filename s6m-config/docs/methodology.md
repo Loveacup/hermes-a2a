@@ -137,6 +137,35 @@
 - 部署同步完成，daemon 已重启，观测到 `dispatch: {'obsidian/regent': 1, 'supermemory/regent': 1}`
 - 文档全面同步：v2 缩窄版、v1.0 综合设计文档、路线图、step4 调查报告、tracking 等
 
+### ADR-006：Core Gateway 统一由 launchd + gateway-wrapper.sh 监管
+
+**日期**：2026-05-30
+**状态**：接受
+
+**背景**：核心 gateway（regent/cron-worker/default）此前以手动 `--replace` 模式运行，存在三个问题：
+1. **无自动重启**：进程崩溃后需人工介入
+2. **SIGTERM 传播不当**：launchd reload 时直接杀父进程，子进程树可能残留（孤儿进程）
+3. **无启动前检查**：配置错误或依赖缺失导致启动即 crash-loop，无诊断信息
+
+**决策**：采用 `scripts/gateway-wrapper.sh` + 独立 launchd plist 统一监管 3 个核心 gateway。
+
+**实现要点**：
+- **Preflight 六项检查**：venv python 可执行性、HERMES_HOME 存在性、config.yaml 可读性、kanban.db 完整性（PRAGMA integrity_check）、.env 存在性、过期 PID 文件清理
+- **killpg SIGTERM 拦截**：trap SIGTERM/SIGINT/SIGQUIT → pkill -P 清理子进程树 → 25s 优雅等待 → SIGKILL 兜底（在 launchd ExitTimeOut=30 内完成）
+- **端口分离**：cron-worker API 端口从 8460 改为 8461（与 default 的 8460 分离），避免端口冲突
+- **滚动接管**：cron-worker → default → regent 依次 bootstrap，每次验证端口监听 + preflight 日志通过后再下一项
+
+**理由**：
+- 统一 preflight 减少"启动后即崩溃"的无效重试循环
+- killpg wrapper 确保 launchd reload 时干净退出，不留孤儿进程
+- 与 A2A 16 profile 的 launchd 监管模式对齐（全部 `KeepAlive` + `ThrottleInterval=30s`）
+
+**后果**：
+- 新增：`scripts/gateway-wrapper.sh`（176行）
+- 新增 launchd plist：`com.hermes.gateway.regent` / `com.hermes.gateway.cron-worker` / `com.hermes.gateway.default`
+- 旧手动 `--replace` 进程已被 launchd 替代
+- cron-worker 端口 8460→8461（已更新 port-map.md 和 task_handler 配置）
+
 ---
 
 ## 部署分层

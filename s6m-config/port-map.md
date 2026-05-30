@@ -60,6 +60,10 @@
 - 16 profile API Server 加 salt `"api:"` 后 100 槽内零碰撞
 - 跨进程方案：sha256 取代 Python `hash()`，跨 launchd 重启端口稳定
 
+## 工具类 Profile（非三省六部成员）
+
+- **cron-worker** — 端口 `8461` — 定时任务 worker gateway，独立于 16 profile 公式分配
+
 ## 用法
 - `core/scripts/hermes-a2a-doctor.sh` 默认读本文件
 - 手动覆盖：`PORT_MAP=/path/to/custom.md bash hermes-a2a-doctor.sh`

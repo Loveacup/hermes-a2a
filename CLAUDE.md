@@ -32,10 +32,13 @@ hermes-a2a/
 │   │   └── seed-a2a-symlinks.sh   # per-profile symlink 种子
 │   └── README.md                  # 内核文档（面向通用 Hermes 用户）
 │
+├── scripts/                       # 🛡️ 运维脚本（仓库级）
+│   └── gateway-wrapper.sh         # T2.5b: preflight + killpg SIGTERM 拦截
+│
 ├── s6m-config/                    # 🏯 三省六部部署配置（业务专属）
 │   ├── plists/                    # 16 个 launchd plist 副本
 │   ├── docs/
-│   │   ├── methodology.md         # ADR-001~005
+│   │   ├── methodology.md         # ADR-001~006
 │   │   ├── tracking.md            # 项目追踪 (同步至 Obsidian)
 │   │   ├── tdd-plan-review.md     # TDD 计划审查
 │   │   ├── tdd-test-plan.md       # TDD 测试计划
@@ -88,6 +91,15 @@ cp core/*.py core/plugin.yaml ~/.hermes/plugins/hermes-a2a/
 # 重启某 profile 的 A2A（plist 改完之后）
 HOME=/Users/alexcai launchctl bootout gui/501/com.hermes.a2a.regent
 HOME=/Users/alexcai launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.hermes.a2a.regent.plist
+
+# Gateway 管理（preflight + killpg wrapper）
+# 查看 gateway wrapper 日志
+tail -f ~/.hermes/logs/gateway-wrapper.log                          # regent/default (HERMES_HOME=~/.hermes)
+tail -f ~/.hermes/profiles/cron-worker/logs/gateway-wrapper.log     # cron-worker
+# 重启 gateway（port 8417/8460/8461 分别对应 regent/default/cron-worker）
+HOME=/Users/alexcai launchctl kickstart -k gui/501/com.hermes.gateway.regent
+# 查看 gateway launchd 状态
+HOME=/Users/alexcai launchctl print gui/501/com.hermes.gateway.regent | grep -E 'state|pid'
 ```
 
 ## 关键约束
@@ -105,14 +117,16 @@ HOME=/Users/alexcai launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.herme
 - Step 2 ✅ 完成：全 16 profile + PORT_RANGE=300 公式化 + launchd 统一监管 + monorepo 拆分
 - 讨论模式 ✅ 完成：ROLEPLAY（双边辩论）+ SYNTHESIZE（综合研判），core/discuss.py + a2a-discussion skill
 - Step 3 ✅ 完成：EmpireThread 事件桥设计（CC 3-Agent 评估 + 5 加固项）
+- T2.5b ✅ 完成：Gateway 系统稳定性加固（gateway-wrapper.sh + 3 core gateway launchd 监管）
 - Step 4 待启动：EmpireThread 事件桥实施（3 周 ~550 行）
 
 详细端口表见 `s6m-config/port-map.md`。
 
 ## 关联系统
 
-- **Default Hermes** — 主频道 / 私人助理 — `localhost:8642` (API Server), `localhost:8945` (A2A)
-- **Regent (Crown Prince)** — 监国太子 — `localhost:8643` (API Server), `localhost:8939` (A2A)
+- **Default Hermes** — 小黄 / 私人助理 — `localhost:8460` (API Server), `localhost:8945` (A2A)
+- **Regent (Crown Prince)** — 监国太子 — `localhost:8417` (API Server), `localhost:8939` (A2A)
+- **Cron Worker** — 定时任务 — `localhost:8461` (API Server)
 - **内阁群** — Telegram 群聊 — `chat_id: -5133970461`
 - **Obsidian** — 知识库 — `/Users/alexcai/Documents/Obsidian/AlexCai/`
 - **jz-skills** — 技能仓库 — `~/code/jz-skills/`
