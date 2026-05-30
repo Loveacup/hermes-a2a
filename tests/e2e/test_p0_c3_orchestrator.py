@@ -48,8 +48,11 @@ import comment_kind as ck                # noqa: E402
 import comment_kind_classifier as cls    # noqa: E402
 import orchestrator_router as orx        # noqa: E402
 
-KANBAN_DB = Path(os.environ.get("HERMES_HOME",
-                                Path.home() / ".hermes")) / "kanban.db"
+def _kanban_db() -> Path:
+    """Lazy resolution — HERMES_HOME is set by pytest fixtures, not at import time."""
+    return Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")) / "kanban.db"
+
+
 TIMEOUT_PER_CARD = 240  # C2 spawns real LLM workers
 POLL_INTERVAL = 10
 
@@ -153,11 +156,11 @@ def test_c1_vote_tally():
     print("\n" + "=" * 60)
     print("C1: VoteTally — vote aggregation over real comments")
     print("=" * 60)
-    if not KANBAN_DB.exists():
-        print(f"  ❌ kanban.db missing at {KANBAN_DB}")
+    if not _kanban_db().exists():
+        print(f"  ❌ kanban.db missing at {_kanban_db()}")
         return False
 
-    conn = sqlite3.connect(str(KANBAN_DB))
+    conn = sqlite3.connect(str(_kanban_db()))
     conn.row_factory = sqlite3.Row
     tid = kanban_create("E2E-C1-v2: VoteTally anchor", assignee="default")
     if not tid:
@@ -217,11 +220,11 @@ def test_c2_deadlock_guard():
     print("\n" + "=" * 60)
     print("C2: Deadlock guard — detect_deadlock + live-cards terminal state")
     print("=" * 60)
-    if not KANBAN_DB.exists():
-        print(f"  ❌ kanban.db missing at {KANBAN_DB}")
+    if not _kanban_db().exists():
+        print(f"  ❌ kanban.db missing at {_kanban_db()}")
         return False
 
-    conn = sqlite3.connect(str(KANBAN_DB))
+    conn = sqlite3.connect(str(_kanban_db()))
     conn.row_factory = sqlite3.Row
 
     # ── (i) detect_deadlock against an anchor thread ─────────────
@@ -306,11 +309,11 @@ def test_c3_comprehensive_debate():
     print("\n" + "=" * 60)
     print("C3: five-turn debate — thread integrity over a2a_comment_kinds")
     print("=" * 60)
-    if not KANBAN_DB.exists():
-        print(f"  ❌ kanban.db missing at {KANBAN_DB}")
+    if not _kanban_db().exists():
+        print(f"  ❌ kanban.db missing at {_kanban_db()}")
         return False
 
-    conn = sqlite3.connect(str(KANBAN_DB))
+    conn = sqlite3.connect(str(_kanban_db()))
     conn.row_factory = sqlite3.Row
     tid = kanban_create("E2E-C3-v2: A2A evolution debate anchor",
                         assignee="default")

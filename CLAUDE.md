@@ -118,7 +118,8 @@ HOME=/Users/alexcai launchctl print gui/501/com.hermes.gateway.regent | grep -E 
 - 讨论模式 ✅ 完成：ROLEPLAY（双边辩论）+ SYNTHESIZE（综合研判），core/discuss.py + a2a-discussion skill
 - Step 3 ✅ 完成：EmpireThread 事件桥设计（CC 3-Agent 评估 + 5 加固项）
 - T2.5b ✅ 完成：Gateway 系统稳定性加固（gateway-wrapper.sh + 3 core gateway launchd 监管）
-- Step 4 待启动：EmpireThread 事件桥实施（3 周 ~550 行）
+- Step 4 ✅ 完成：EmpireThread 事件桥实施（P0-1 emit hook 全链路闭环：pre_tool_call → JSONL → daemon → Obsidian + Supermemory）
+- 部署计划 ✅ 完成：全部 Step 1-4 + T2.5b 已闭环
 
 详细端口表见 `s6m-config/port-map.md`。
 

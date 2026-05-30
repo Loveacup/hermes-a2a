@@ -10,6 +10,9 @@ def test_load_or_create_token_from_env(hermes_home, monkeypatch, reset_auth):
 
 def test_load_or_create_token_from_file(hermes_home, monkeypatch, reset_auth):
     monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    # BUG-007: _resolve_token_path() uses hermes_root(), not hermes_home.
+    # Set HERMES_ROOT so the file path matches what load_or_create_token reads.
+    monkeypatch.setenv("HERMES_ROOT", str(hermes_home))
     (hermes_home / ".a2a-token").write_text("file-token-abc")
     import auth
     tok = auth.load_or_create_token(str(hermes_home))
@@ -18,6 +21,8 @@ def test_load_or_create_token_from_file(hermes_home, monkeypatch, reset_auth):
 
 def test_load_or_create_token_auto_generates(hermes_home, monkeypatch, reset_auth):
     monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    # BUG-007: token is saved to hermes_root(), not hermes_home.
+    monkeypatch.setenv("HERMES_ROOT", str(hermes_home))
     import auth
     tok = auth.load_or_create_token(str(hermes_home))
     assert len(tok) >= 32

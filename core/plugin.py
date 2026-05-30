@@ -135,12 +135,24 @@ def _open_log(profile: str, hermes_home: str):
 
 
 def register(ctx) -> None:
-    """Hermes plugin entry — spawn A2A HTTP server on profile-specific port.
+    """Hermes plugin entry — spawn A2A HTTP server + register EmpireThread emit hook.
 
     P0-001: 若端口已有 listener（launchd 管理的 A2A server），跳过 spawn。
     避免 plugin.py Popen 与 launchd KeepAlive 三方互杀导致进程风暴。
+
+    P0-1 (Step 4): 注册 pre_tool_call hook → empire-thread.jsonl，
+    由 EventBridge daemon 异步消费 → Obsidian + Supermemory。
     """
     global _server_proc, _log_handle
+
+    # ── P0-1: EmpireThread emit hook ────────────────────────────
+    try:
+        from . import empire_emit
+        empire_emit.register_emit_hook(ctx)
+        logger.info("[hermes-a2a] EmpireThread emit hook registered")
+    except Exception:
+        logger.exception("[hermes-a2a] EmpireThread emit hook failed to register")
+
     if _server_proc and _server_proc.poll() is None:
         logger.warning("[hermes-a2a] already running pid=%s; skip spawn", _server_proc.pid)
         return

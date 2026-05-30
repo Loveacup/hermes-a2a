@@ -46,9 +46,12 @@ import comment_kind as ck                # noqa: E402
 import comment_kind_classifier as cls    # noqa: E402
 import orchestrator_router as orx        # noqa: E402
 
-KANBAN_DB = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")) / "kanban.db"
+def _kanban_db() -> Path:
+    """Lazy resolution — HERMES_HOME is set by pytest fixtures, not at import time."""
+    return Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")) / "kanban.db"
 
-# (body_template, expected_kind, expected_target_profile)
+
+# ───
 # Body templates chosen to hit either the prefix or the heuristic path of
 # comment_kind_classifier. Targets come from orchestrator_router.ROUTE_BY_KIND.
 ROUTING_CASES = [
@@ -118,12 +121,12 @@ def test_b1_comment_routing_pipeline():
     print("B1: comment → classify → record_kind → route_comment (live kanban)")
     print("=" * 60)
 
-    if not KANBAN_DB.exists():
-        print(f"  ❌ kanban.db missing at {KANBAN_DB}")
+    if not _kanban_db().exists():
+        print(f"  ❌ kanban.db missing at {_kanban_db()}")
         return False
 
     # Sanity: bypass table must exist (migration applied)
-    conn = sqlite3.connect(str(KANBAN_DB))
+    conn = sqlite3.connect(str(_kanban_db()))
     conn.row_factory = sqlite3.Row
     try:
         ok = conn.execute(
@@ -233,11 +236,11 @@ def test_b2_bypass_table_population():
     print("\n" + "=" * 60)
     print("B2: Scheme D bypass table population (kinds from B1 writes)")
     print("=" * 60)
-    if not KANBAN_DB.exists():
-        print(f"  ❌ kanban.db missing at {KANBAN_DB}")
+    if not _kanban_db().exists():
+        print(f"  ❌ kanban.db missing at {_kanban_db()}")
         return False
 
-    conn = sqlite3.connect(str(KANBAN_DB))
+    conn = sqlite3.connect(str(_kanban_db()))
     try:
         count = conn.execute(
             "SELECT COUNT(*) FROM a2a_comment_kinds"
@@ -268,7 +271,7 @@ def test_b3_upstream_isolation():
     print("\n" + "=" * 60)
     print("B3: Upstream task_comments isolation check")
     print("=" * 60)
-    conn = sqlite3.connect(str(KANBAN_DB))
+    conn = sqlite3.connect(str(_kanban_db()))
     try:
         columns = [
             row[1] for row in conn.execute("PRAGMA table_info(task_comments)")
