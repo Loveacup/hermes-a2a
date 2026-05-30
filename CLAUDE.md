@@ -114,7 +114,7 @@ HOME=/Users/alexcai launchctl print gui/501/com.hermes.gateway.regent | grep -E 
 ## 部署计划
 
 - Step 1 ✅ 完成：6 profile（engineer/shangshu/budget/regent/default/gongbu）
-- Step 2 ✅ 完成：全 16 profile + PORT_RANGE=300 公式化 + launchd 统一监管 + monorepo 拆分
+- Step 2 ✅ 完成：全 16 profile 运行中（v0.2.0，gateway 内嵌模式，16/16 端口健康检查通过）。P0 修复已就位（registry plist 格式修复、MCP 瘦身、僵尸清理）。loadavg 2.1 正常。
 - 讨论模式 ✅ 完成：ROLEPLAY（双边辩论）+ SYNTHESIZE（综合研判），core/discuss.py + a2a-discussion skill
 - Step 3 ✅ 完成：EmpireThread 事件桥设计（CC 3-Agent 评估 + 5 加固项）
 - T2.5b ✅ 完成：Gateway 系统稳定性加固（gateway-wrapper.sh + 3 core gateway launchd 监管）
