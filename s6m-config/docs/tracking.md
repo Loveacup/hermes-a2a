@@ -166,3 +166,5 @@ hermes-a2a/（源码 ~/code/hermes-a2a/）
 - 2026-05-30: 3S6M 插件前置调研 — Hermes 插件系统能力验明：ctx.register_skill() 支持 plugin: 命名空间（优于 §12 设计），A2A 进程管理仍需 launchd。设计搁置，待父皇召唤。
 - 2026-05-30: Kanban 损坏根因修复 — 定位为 Legacy TEXT-PK schema drift（commit `c70dca3a8`），git pull 144 commits + Gateway 重启后 `_rebuild_drifted_tables` 自动修复。integrity_check=ok，清理 36MB corrupt backups。详见 [[hermes-a2a_Kanban损坏根因调查_20260530]]。
 - 2026-05-30: Supermemory 双池修复 — 定位为 `_sanitize_tag` 正则吃连字符 bug，创建 `~/.hermes/supermemory.json`，Event Bridge daemon 重启零 timeout。5 篇旧文档待 Dashboard re-tag。详见 [[hermes-a2a_Supermemory双池审计_20260530]]。
+- 2026-05-31: **L3 E2E 全场景完成** — S2(代码审查 10/10 998s)、S3(早新闻 7/7 396s)、S4(制度修改 8/8 632s)、S5(双次封驳 9/9 903s)，合计 34/34 全绿。TDD 全链验证，7 个 commit，5 个 E2E 测试文件。测试文件：`tests/e2e/test_l3_s{2,3,4,5}_*.py`。
+- 2026-05-31: **L4 非功能测试完成** — Auth 强制(2/2)、跨 profile 隔离(1/1)、宕机恢复(2/2)，5/5 <1min，commit `cd6362c`。L0-L4 金字塔全面建成。
