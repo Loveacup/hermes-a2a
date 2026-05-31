@@ -2,7 +2,7 @@
 project: hermes-a2a
 status: v0.2.0 稳定 — 16/16 全绿，T2.5b Gateway 加固完成
 created: 2026-05-27
-modified: 2026-05-30
+modified: 2026-05-31
 repo: https://github.com/finalhour/hermes-a2a
 ---
 
@@ -22,8 +22,9 @@ repo: https://github.com/finalhour/hermes-a2a
 - **Gateway**：regent(8417) + default(8460) + cron-worker(8461) 全部监管运行
 - **执行模式**：全 16 profile 走 api_server 模式（task_handler 已去白名单）
 - **进程管理**：A2A server 在 gateway 内嵌运行（非独立 launchd），端口冲突自动 skip
-- **Kanban**：4 done + 2 blocked（E2E 测试残留），dispatcher 内嵌 gateway
+- **Kanban**：0 active（全清，integrity=ok）
 - **E2E**：6/6 文件全部通过（含 DCI pipeline、辩论、16-profile 矩阵）
+- **金字塔**：L3 44/44 + L4 5/5 = 49 项全绿
 
 ### 16 Profile 部署清单
 
@@ -130,7 +131,14 @@ hermes-a2a/（源码 ~/code/hermes-a2a/）
 │       └── design/              # 设计方案
 ├── scripts/
 │   └── gateway-wrapper.sh       # preflight + killpg 拦截
-├── tests/                       # E2E + 单元测试
+│ ├── tests/                       # E2E + 单元测试
+│ │   ├── e2e/
+│ │   │   ├── test_l3_s2_code_review.py       # S2 代码审查 10/10
+│ │   │   ├── test_l3_s3_morning_news.py      # S3 早新闻 7/7
+│ │   │   ├── test_l3_s4_governance_change.py # S4 制度修改 8/8
+│ │   │   ├── test_l3_s5_double_rebuke.py     # S5 双次封驳 9/9
+│ │   │   └── test_l4_nonfunctional.py        # L4 非功能 5/5
+│ │   └── unit/
 ├── CLAUDE.md
 └── README.md
 ```
@@ -164,7 +172,9 @@ hermes-a2a/（源码 ~/code/hermes-a2a/）
 - 2026-05-30: Step 2 部署完成 — 16/16 v0.2.0 全部运行, P0 registry plist 修复, MCP 瘦身, commit `d075d4a`。
 - 2026-05-30: 环境清理 — 部署同步（rsync 31 文件 core/ → 部署），Kanban 残留任务 blocked，跟踪文档全量更新。
 - 2026-05-30: 3S6M 插件前置调研 — Hermes 插件系统能力验明：ctx.register_skill() 支持 plugin: 命名空间（优于 §12 设计），A2A 进程管理仍需 launchd。设计搁置，待父皇召唤。
-- 2026-05-30: Kanban 损坏根因修复 — 定位为 Legacy TEXT-PK schema drift（commit `c70dca3a8`），git pull 144 commits + Gateway 重启后 `_rebuild_drifted_tables` 自动修复。integrity_check=ok，清理 36MB corrupt backups。详见 [[hermes-a2a_Kanban损坏根因调查_20260530]]。
-- 2026-05-30: Supermemory 双池修复 — 定位为 `_sanitize_tag` 正则吃连字符 bug，创建 `~/.hermes/supermemory.json`，Event Bridge daemon 重启零 timeout。5 篇旧文档待 Dashboard re-tag。详见 [[hermes-a2a_Supermemory双池审计_20260530]]。
-- 2026-05-31: **L3 E2E 全场景完成** — S2(代码审查 10/10 998s)、S3(早新闻 7/7 396s)、S4(制度修改 8/8 632s)、S5(双次封驳 9/9 903s)，合计 34/34 全绿。TDD 全链验证，7 个 commit，5 个 E2E 测试文件。测试文件：`tests/e2e/test_l3_s{2,3,4,5}_*.py`。
+- 2026-05-31: **L3 E2E 全场景完成** — S2(代码审查 10/10 998s)、S3(早新闻 7/7 396s)、S4(制度修改 8/8 632s)、S5(双次封驳 9/9 903s)，TDD 全链验证。7 个 commit，5 个 E2E 测试文件。详见 [[三省六部全面测试方案_20260530]]。
 - 2026-05-31: **L4 非功能测试完成** — Auth 强制(2/2)、跨 profile 隔离(1/1)、宕机恢复(2/2)，5/5 <1min，commit `cd6362c`。L0-L4 金字塔全面建成。
+- 2026-05-31: **L3-S1 健康扫描 E2E 完成** — planner→reviewer→shangshu→budget∥gongbu→protocol→tester→reviewer→archivist 全 9 步链，10/10 ALL GREEN。修复：gongbu 超时 480→900s、DeepSeek credits 耗尽→切 provider、gongbu 任务精简。commit `eb18a9c`。
+- 2026-05-31: **SWAP 看门狗确认** — SWAP 55% 正常，sysctl 在 cron sandbox 可用（旧误报已消解），无需修复。
+- 2026-05-31: **Supermemory re-tag 完成** — 5 篇旧文档标签 `hermes_cabinet`→`hermes-cabinet` 修复（Dashboard 手动），`_sanitize_tag` 已修复新文档不再受影响。
+- 2026-05-31: **L3 E2E 金字塔全绿** — S1(10/10) + S2(10/10) + S3(7/7) + S4(8/8) + S5(9/9) = 44/44 全绿，L4 5/5，合计 49 项全通。[[E2E测试结果汇总_20260531]]
