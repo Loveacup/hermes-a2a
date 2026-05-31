@@ -163,7 +163,6 @@ archivist 归档 → Obsidian + Supermemory
 - [x] L0-L4 五层测试金字塔（49/49 全绿）
 - [x] Gateway 监管（launchd + preflight + killpg）
 - [ ] L4 性能压测（16 Profile 并发 + Kanban 100 卡）
-- [ ] 早新闻 Cron 化（每日自动生成投递）
 - [ ] 3S6M 插件构建
 
 ---
