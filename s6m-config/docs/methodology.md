@@ -157,15 +157,7 @@ pre_tool_call hook → JSONL → launchd sidecar daemon
 
 ## 三、部署拓扑
 
-### 3.1 物理拓扑
-
-| 机器 | 角色 |
-|------|------|
-| Mac mini | Docker + Hermes 16-profile 三省六部常驻 · IP 192.168.x.x · 用户 user |
-| MacBook Pro | Claude Code 重活 + 本地小模型部署 |
-| Windows 台式 | 游戏 + pi 轻量工作 · SSH 免密已通 Mac mini |
-
-### 3.2 端口公式
+### 3.1 端口公式
 
 ```
 A2A 端口  = 8650 + sha256(profile) % 300         # PORT_RANGE=300，零碰撞
@@ -174,7 +166,7 @@ API 端口  = 8400 + sha256('api:' + profile) % 100 # salted，零碰撞
 
 PORT_RANGE 三次迭代 50 → 200 → 300 才彻底消除碰撞。
 
-### 3.3 关键目录树
+### 3.2 关键目录树
 
 ```
 ~/.hermes/
@@ -203,7 +195,7 @@ PORT_RANGE 三次迭代 50 → 200 → 300 才彻底消除碰撞。
 
 源码仓库：`~/code/hermes-a2a/`，已拆分为 `core/`（通用 A2A 内核）+ `s6m-config/`（三省六部专属配置）。
 
-### 3.4 Kanban DB 架构
+### 3.3 Kanban DB 架构
 
 ```
 ~/.hermes/kanban.db (WAL 模式，6 张表)
@@ -220,7 +212,7 @@ PORT_RANGE 三次迭代 50 → 200 → 300 才彻底消除碰撞。
 └── boards/<slug>/          ← 每个项目独立 DB
 ```
 
-### 3.5 launchd 监管
+### 3.4 launchd 监管
 
 每 profile 一个 `com.hermes.a2a.<profile>.plist`，`KeepAlive=true`，`ThrottleInterval=30`。Gateway 三机：regent（8417）+ default（8460）+ cron-worker（8461）全部由 launchd 监管。
 
