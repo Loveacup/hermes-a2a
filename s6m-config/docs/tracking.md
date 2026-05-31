@@ -1,9 +1,9 @@
 ---
-project: hermes-a2a
-status: v0.2.0 稳定 — 16/16 全绿，T2.5b Gateway 加固完成
+project: hermes-s6m-a2a
+status: v0.3.0 — 方法论文档 v2.0 + README 重写，49 项全绿
 created: 2026-05-27
 modified: 2026-05-31
-repo: https://github.com/finalhour/hermes-a2a
+repo: https://github.com/finalhour/hermes-s6m-a2a
 ---
 
 # hermes-a2a：三省六部 A2A 互通协议
