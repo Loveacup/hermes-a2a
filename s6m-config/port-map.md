@@ -1,3 +1,7 @@
+---
+tags: [hermes-s6m-a2a, 三省六部, 端口]
+---
+
 # 三省六部 A2A 端口映射表
 
 端口公式：`8650 + sha256(profile) % 300` (PORT_RANGE=300)
@@ -28,41 +32,14 @@
 - 最高：8945 (default)
 - 总跨度：291 端口（在 PORT_RANGE=300 内）
 
-## 16 API Server 端口（Hermes Gateway, 与 A2A 共存）
-
-公式：`8400 + sha256("api:" + profile) % 100` （T2 全 profile 推广，salted 保零碰撞）
-
-零碰撞验证通过：16 profile 全部分配到唯一端口（8400-8499 范围）。
-
-- **API_archivist** — 端口 `8431`
-- **API_auditor** — 端口 `8468`
-- **API_budget** — 端口 `8445`
-- **API_default** — 端口 `8460`
-- **API_dispatcher** — 端口 `8465`
-- **API_engineer** — 端口 `8482`
-- **API_gongbu** — 端口 `8458`
-- **API_hanlinyuan** — 端口 `8466`
-- **API_jiangzuojian** — 端口 `8425`
-- **API_planner** — 端口 `8474`
-- **API_protocol** — 端口 `8443`
-- **API_regent** — 端口 `8417`
-- **API_registry** — 端口 `8438`
-- **API_reviewer** — 端口 `8493`
-- **API_shangshu** — 端口 `8492`
-- **API_tester** — 端口 `8480`
-
-> **迁移说明**：T2 前 default:8642 / regent:8643 为旧端口，已迁移至公式分配的新值。
-> 旧端口在生产 gateway 重启前仍可达；任务派发通过 task_handler._api_server_port 动态查询。
+## 双 API Server（Hermes 原生，与 A2A 共存）
+- **default API Server** — 端口 `8642`
+- **regent API Server** — 端口 `8643`
 
 ## 端口冲突防御
-- A2A 与 API Server 完全分离端口空间（A2A 8650-8949，API Server 8400-8499）
+- A2A 与 API Server 完全分离端口空间（A2A 8654-8945，API Server 8642-8643）
 - 16 profile A2A 之间数学验证无碰撞（PORT_RANGE=300 实测）
-- 16 profile API Server 加 salt `"api:"` 后 100 槽内零碰撞
 - 跨进程方案：sha256 取代 Python `hash()`，跨 launchd 重启端口稳定
-
-## 工具类 Profile（非三省六部成员）
-
-- **cron-worker** — 端口 `8461` — 定时任务 worker gateway，独立于 16 profile 公式分配
 
 ## 用法
 - `core/scripts/hermes-a2a-doctor.sh` 默认读本文件

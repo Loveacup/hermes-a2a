@@ -178,3 +178,8 @@ hermes-a2a/（源码 ~/code/hermes-a2a/）
 - 2026-05-31: **SWAP 看门狗确认** — SWAP 55% 正常，sysctl 在 cron sandbox 可用（旧误报已消解），无需修复。
 - 2026-05-31: **Supermemory re-tag 完成** — 5 篇旧文档标签 `hermes_cabinet`→`hermes-cabinet` 修复（Dashboard 手动），`_sanitize_tag` 已修复新文档不再受影响。
 - 2026-05-31: **L3 E2E 金字塔全绿** — S1(10/10) + S2(10/10) + S3(7/7) + S4(8/8) + S5(9/9) = 44/44 全绿，L4 5/5，合计 49 项全通。[[E2E测试结果汇总_20260531]]
+- 2026-05-31: **仓库改名** — `hermes-a2a` → `hermes-s6m-a2a`（三省六部×A2A 治理通信协议），GitHub 已生效，本地 remote 已更新。
+- 2026-05-31: **README 重写 + 方法论 v2.0** — README 治理优先定位（~200 行双语），方法论文档 v2.0 产出（892 行 10 章，入 00-Inbox + 仓库 s6m-config/docs/methodology.md）。commit `16d98d4`。
+- 2026-05-31: **methodology.md 脱敏** — 7 类 PII 清除（用户名/IP/机器名/GitHub org），commit `d75d6b1`。
+- 2026-05-31: **去掉 §3.1 物理拓扑** — 方法论双版本同步删除三台机器表，重编号 3.2-3.5→3.1-3.4，commit `2b98f9b`。
+- 2026-05-31: **Hermes v0.15.2 升级** — 打包修复（plugin.yaml 入 wheel/sdist），三省六部全量自检通过（A2A 16/16 ✅，Gateway ✅，Kanban ✅，烟幕 completed ✅）。
