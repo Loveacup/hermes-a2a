@@ -64,7 +64,7 @@ version: v2.0
 ### 2.1 全景架构
 
 ```
-                    用户（父皇 finalhour）
+                    用户（父皇）
                               │
                        监国太子（regent）
                               │
@@ -80,7 +80,7 @@ version: v2.0
 
 旁挂：
 
-- **独立角色 default（小黄）**：Alex 的个人主频道助手，独立于三省六部之外
+- **独立角色 default（小黄）**：用户的个人主频道助手，独立于三省六部之外
 - **可选扩展**：太常寺（仪式感）、教坊司（娱乐）、tester（司验院/独立测试）
 
 ### 2.2 16 Profile 角色表
@@ -161,8 +161,8 @@ pre_tool_call hook → JSONL → launchd sidecar daemon
 
 | 机器 | 角色 |
 |------|------|
-| Mac mini | Docker + Hermes 16-profile 三省六部常驻 · IP 192.168.2.251 · 用户 alexcai |
-| MacBook Pro M5 | Claude Code 重活 + 本地小模型部署 |
+| Mac mini | Docker + Hermes 16-profile 三省六部常驻 · IP 192.168.x.x · 用户 user |
+| MacBook Pro | Claude Code 重活 + 本地小模型部署 |
 | Windows 台式 | 游戏 + pi 轻量工作 · SSH 免密已通 Mac mini |
 
 ### 3.2 端口公式
@@ -228,8 +228,8 @@ PORT_RANGE 三次迭代 50 → 200 → 300 才彻底消除碰撞。
 <!-- 必须用 venv python 而非 system python 3.9 -->
 <key>ProgramArguments</key>
 <array>
-  <string>/Users/alexcai/.hermes/hermes-agent/venv/bin/python3</string>
-  <string>/Users/alexcai/.hermes/plugins/hermes-a2a/server.py</string>
+  <string>~/.hermes/hermes-agent/venv/bin/python3</string>
+  <string>~/.hermes/plugins/hermes-a2a/server.py</string>
 </array>
 ```
 
@@ -479,7 +479,7 @@ if profile == 'regent':
 else:
     identity_prefix = (
         '【系统提示】你正在通过 A2A 协议接收任务。'
-        '你的身份：小黄（主频道助手），Alex 的个人助理。'
+        '你的身份：小黄（主频道助手），用户的个人助理。'
         '你独立于三省六部体系之外...'
     )
 ```
@@ -638,8 +638,8 @@ plutil -p ~/Library/LaunchAgents/com.hermes.a2a.<profile>.plist | grep -i python
 
 # 修复
 pkill -f "hermes-a2a/server.py"
-HOME=/Users/alexcai launchctl bootout gui/501/com.hermes.a2a.<profile>
-HOME=/Users/alexcai launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.hermes.a2a.<profile>.plist
+HOME=/Users/user launchctl bootout gui/501/com.hermes.a2a.<profile>
+HOME=/Users/user launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.hermes.a2a.<profile>.plist
 
 # 验证
 ps aux | grep server.py | grep -v grep | wc -l    # 期望 = 1 per profile
@@ -653,7 +653,7 @@ Hermes session 把 HOME 改成 profile 沙箱（`~/.hermes/profiles/<profile>/ho
 
 | 视角 | 路径 |
 |------|------|
-| Daemon 视角（真实 HOME） | `/Users/alexcai/.hermes/supermemory.json` |
+| Daemon 视角（真实 HOME） | `~/.hermes/supermemory.json` |
 | Session 视角（profile home） | `$HERMES_HOME/supermemory.json` |
 
 诊断跨进程问题时，必须同时在两个路径下检查。
@@ -884,7 +884,7 @@ bash ~/code/hermes-a2a/core/scripts/hermes-a2a-doctor.sh
 - A2A Spec (Google → Linux Foundation, 23.4K⭐)
 - 三省六部宪章 skill (constitution v2.0.0)
 - 内阁群 Telegram chat（人类交互入口）
-- jz-skills 仓库（GitHub: Loveacup/jz-skills，53 个 SKILL.md，MIT 许可）
+- jz-skills 仓库（GitHub: `<org>/jz-skills`，53 个 SKILL.md，MIT 许可）
 
 ---
 
