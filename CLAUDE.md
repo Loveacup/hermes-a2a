@@ -4,7 +4,7 @@
 
 **hermes-a2a** 是 Hermes Agent 的 A2A（Agent-to-Agent）协议实现，monorepo 结构分两层：通用内核 + 三省六部部署配置。
 
-- 仓库：`~/code/hermes-a2a/`
+- 仓库：`~/code/hermes-a2a/`（GitHub: `hermes-s6m-a2a`）
 - 部署：`~/.hermes/plugins/hermes-a2a/` ← symlink 或 cp 自 `core/`
 - 协议：Google A2A Protocol (a2aproject/A2A, Apache 2.0)
 
